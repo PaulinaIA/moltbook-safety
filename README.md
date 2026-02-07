@@ -1,6 +1,11 @@
 # Moltbook Karma Data Engineering Pipeline
 
-A production-grade data engineering pipeline for scraping [moltbook.com](https://www.moltbook.com/), processing data with Polars, and training a karma prediction model with H2O AutoML.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+![Moltbook Banner](assets/banner.jpg)
+
+> End-to-end data pipeline for scraping moltbook.com, processing with Polars, and predicting user karma with H2O AutoML.
 
 ## Project Structure
 
