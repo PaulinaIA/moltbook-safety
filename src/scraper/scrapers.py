@@ -124,6 +124,8 @@ class MoltbookScraper:
         self,
         max_submolts: int = 50,
         force_refresh: bool = False,
+        max_posts: int = 10,
+        max_comments: int = 10,
     ) -> List[SubMolt]:
         """Scrape submolt (community) pages.
 
@@ -160,7 +162,7 @@ class MoltbookScraper:
                 logger.info("Scraped submolt: %s", submolt.name)
 
                 # Also scrape posts from this submolt
-                self._scrape_posts_from_html(html, submolt.id_submolt, name)
+                self._scrape_posts_from_html(html, submolt.id_submolt, name, max_posts=max_posts, max_comments=max_comments)
 
             except Exception as e:
                 logger.error("Failed to scrape submolt from %s: %s", url, e)
@@ -174,6 +176,8 @@ class MoltbookScraper:
         html: str,
         submolt_id: Optional[str],
         submolt_name: Optional[str],
+        max_posts: Optional[int] = 10,
+        max_comments: Optional[int] = 10,
     ) -> List[Post]:
         """Extract and persist posts from page HTML.
 
@@ -185,7 +189,7 @@ class MoltbookScraper:
         Returns:
             List of Post objects
         """
-        posts_data = parse_posts_from_page(html, submolt_name)
+        posts_data = parse_posts_from_page(html, submolt_name, max_posts=max_posts)
         posts: List[Post] = []
 
         for post_data in posts_data:
@@ -203,7 +207,9 @@ class MoltbookScraper:
                 self.db_ops.upsert(new_user)
                 user_id = new_user.id_user
 
+            id_post = post_data.get("post_url").split("/")[-1]
             post = Post.from_scraped_data(
+                id=id_post,
                 id_user=user_id,
                 title=post_data.get("title"),
                 description=post_data.get("description"),
@@ -215,15 +221,82 @@ class MoltbookScraper:
             posts.append(post)
             self.db_ops.upsert(post)
 
+
+            try:
+                url = post_data.get("post_url")
+                name = url.split("/post/")[-1]
+                html = self.scraper.fetch_with_cache(
+                    url,
+                    force_refresh=True,
+                    wait_selector="div.mt-6",
+                )
+                self.scraper.scroll_to_load_all(max_scrolls=5)
+                self._scrape_comments_from_html(html=html, post_id=post.id_post, max_comments=max_comments)
+
+            except Exception as e:
+                logger.error("Failed to scrape submolt from %s: %s", url, e)
+                continue
+
+            
+
         logger.debug("Extracted %d posts from page", len(posts))
         return posts
+    
+    def _scrape_comments_from_html(
+        self,
+        html: str,
+        post_id: str,
+        max_comments: Optional[int] = 100,
+    ) -> List[Comment]:
+        """Extract and persist comments from page HTML.
+
+        Args:
+            html: Page HTML content
+            post_id: Associated Post ID
+
+        Returns:
+            List of Comment objects
+        """
+        comments_data = parse_comments(html, post_id)
+        comments: List[Comment] = []
+
+        for comment_data in comments_data:
+            author_name = comment_data.get("author_name")
+            if not author_name:
+                continue
+
+            # Get or create user ID 
+            user_id = None
+            user = self.db_ops.get_by_id(User, f"user_{author_name.lower()[:12]}")
+            if user:
+                user_id = user["id_user"]
+            else:
+                # Create minimal user record
+                new_user = User.from_scraped_data(name=author_name)
+                self.db_ops.upsert(new_user)
+                user_id = new_user.id_user 
+            if not user_id:
+                logger.warning("Could not determine user ID for comment author '%s'", author_name)
+                continue
+            comment = Comment.from_scraped_data(
+                id_user=user_id,
+                id_post=post_id,
+                description=comment_data.get("description"),
+                rating=comment_data.get("rating", 0),
+                date=comment_data.get("date"),
+            )
+            comments.append(comment)
+            self.db_ops.upsert(comment)
+
+        logger.debug("Extracted %d comments from page", len(comments))
+        return comments
 
     def scrape_all(
         self,
-        max_users: int = 100,
-        max_submolts: int = 50,
-        max_posts: int = 500,
-        max_comments: int = 1000,
+        max_users: int = 10,
+        max_submolts: int = 5,
+        max_posts: int = 10,
+        max_comments: int = 100,
         force_refresh: bool = False,
     ) -> dict:
         """Run full scraping pipeline.
@@ -241,7 +314,7 @@ class MoltbookScraper:
         logger.info("Starting full scrape pipeline")
 
         users = self.scrape_users(max_users=max_users, force_refresh=force_refresh)
-        submolts = self.scrape_submolts(max_submolts=max_submolts, force_refresh=force_refresh)
+        submolts = self.scrape_submolts(max_submolts=max_submolts, force_refresh=force_refresh, max_posts=max_posts, max_comments=max_comments)
 
         # Count posts and comments from database
         post_count = self.db_ops.count(Post)

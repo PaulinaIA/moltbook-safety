@@ -45,6 +45,8 @@ source .venv/bin/activate
 
 # Install dependencies
 pip install -e ".[dev]"
+or
+pip install .
 
 # Install Playwright browsers
 playwright install chromium

@@ -10,6 +10,9 @@ from typing import Dict, List, Optional, Any
 from bs4 import BeautifulSoup, Tag
 
 from config.selectors import selectors
+from datetime import datetime, timedelta
+import re
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +309,35 @@ def parse_submolt_page(html: str, submolt_name: str) -> Dict[str, Any]:
     return result
 
 
+
+def convert_relative_to_date(text: str) -> str:
+    """Convierte '9d ago', '2h ago', etc., en un string de fecha YYYY-MM-DD."""
+    now = datetime.now()
+    # Buscamos el número y la unidad (d=días, h=horas, m=minutos, w=semanas)
+    match = re.search(r'(\d+)([a-z]+)', text.lower())
+    
+    if not match:
+        return now.strftime("%Y-%m-%d") # Si no hay match, asumimos hoy
+
+    value = int(match.group(1))
+    unit = match.group(2)
+
+    if 'd' in unit:
+        date_obj = now - timedelta(days=value)
+    elif 'h' in unit:
+        date_obj = now - timedelta(hours=value)
+    elif 'm' in unit: # minutos
+        date_obj = now - timedelta(minutes=value)
+    elif 'w' in unit:
+        date_obj = now - timedelta(weeks=value)
+    elif 'mo' in unit: # meses (aproximación de 30 días)
+        date_obj = now - timedelta(days=value * 30)
+    else:
+        date_obj = now
+
+    return date_obj.strftime("%Y-%m-%d")
+
+
 def parse_post(element: Tag, submolt_name: Optional[str] = None) -> Dict[str, Any]:
     """Parse a single post element.
 
@@ -327,43 +359,43 @@ def parse_post(element: Tag, submolt_name: Optional[str] = None) -> Dict[str, An
     }
 
     # Find title
-    title_elem = element.find(["h3", "h2"]) or element.select_one("a.font-bold")
+    href = element.get("href")
+    if href:
+        result["post_url"] = f"https://www.moltbook.com{href}" if href.startswith("/") else href
+    
+    title_elem = element.select_one("h3")
     if title_elem:
         result["title"] = safe_get_text(title_elem)
-        # Get post URL from title link if it exists
-        if title_elem.name == "a":
-            result["post_url"] = safe_get_attr(title_elem, "href")
-        else:
-            link = title_elem.find("a")
-            if link:
-                result["post_url"] = safe_get_attr(link, "href")
-
-    # Find author
-    author_link = element.select_one("a[href^='/u/']")
-    if author_link:
-        result["author_name"] = extract_username_from_url(safe_get_attr(author_link, "href"))
-
-    # Find submolt if not provided
+    desc_elem = element.select_one("p.line-clamp-3")
+    if desc_elem:
+        result["description"] = safe_get_text(desc_elem)
+    author_elem = element.select_one("span.hover\:underline")
+    if author_elem:
+        result["author_name"] = author_elem.get_text(strip=True).replace("u/", "")
     if not submolt_name:
         submolt_link = element.select_one("a[href^='/m/']")
         if submolt_link:
             result["submolt_name"] = extract_submolt_from_url(safe_get_attr(submolt_link, "href"))
 
-    # Find rating/points
-    body_text = element.get_text()
-    points_match = re.search(r"(\d+)\s*(?:points?|upvotes?)", body_text, re.I)
-    if points_match:
-        result["rating"] = int(points_match.group(1))
-
-    # Find date
-    time_elem = element.find("time")
-    if time_elem:
-        result["date"] = safe_get_attr(time_elem, "datetime") or safe_get_text(time_elem)
+    rating_elem = element.select_one("span.text-white.font-bold")
+    if rating_elem:
+        try:
+            result["rating"] = int(rating_elem.get_text(strip=True))
+        except ValueError:
+            result["rating"] = 0
+    author_div = element.select_one("div.text-xs")
+    if author_div:
+        full_text = author_div.get_text(" ", strip=True)
+        if "ago" in full_text:
+            relative_text = full_text.split("ago")[0].strip() + " ago"
+            result["date"] = convert_relative_to_date(relative_text)
+        else:
+            result["date"] = datetime.now().strftime("%Y-%m-%d")
 
     return result
 
 
-def parse_posts_from_page(html: str, submolt_name: Optional[str] = None) -> List[Dict[str, Any]]:
+def parse_posts_from_page(html: str, submolt_name: Optional[str] = None, max_posts: Optional[int] = 10) -> List[Dict[str, Any]]:
     """Parse all posts from a page (submolt or user profile).
 
     Args:
@@ -376,38 +408,83 @@ def parse_posts_from_page(html: str, submolt_name: Optional[str] = None) -> List
     soup = BeautifulSoup(html, "lxml")
     posts: List[Dict[str, Any]] = []
 
-    # Try different post container selectors
-    post_containers = soup.select("article") or soup.select("div.post") or soup.select("div.border-b")
 
+    post_containers = soup.select("a[href^='/post/']")
+    logger.info("Found %d post containers on page", len(post_containers))
+    counter = 0
     for container in post_containers:
         post = parse_post(container, submolt_name)
-        if post.get("title") or post.get("author_name"):
+        if post.get("title") or post.get("url") :
             posts.append(post)
-
+            if max_posts and counter >= max_posts:
+                break
+            counter += 1
     logger.info("Parsed %d posts from page", len(posts))
     return posts
 
 
-def parse_comments(html: str, post_id: str) -> List[Dict[str, Any]]:
-    """Parse comments from a post page.
+# def parse_comments(html: str, post_id: str, max_comments: Optional[int] = 10) -> List[Dict[str, Any]]:
+    # """Parse comments from a post page.
+    # 
+    # Args:
+    #     html: HTML content of post page
+    #     post_id: ID of the parent post
 
-    Args:
-        html: HTML content of post page
-        post_id: ID of the parent post
+    # Returns:
+    #     List of comment dictionaries
+    # """
+    # soup = BeautifulSoup(html, "lxml")
+    # comments: List[Dict[str, Any]] = []
 
-    Returns:
-        List of comment dictionaries
-    """
+    # # Try different comment selectors
+    # comment_containers = (
+    #     soup.select("div.comment")
+    #     or soup.select("div[class*='comment']")
+    #     or soup.select("div.pl-4")
+    # )
+
+    # for container in comment_containers[:max_comments]:
+    #     result: Dict[str, Any] = {
+    #         "post_id": post_id,
+    #         "author_name": None,
+    #         "description": None,
+    #         "date": None,
+    #         "rating": 0,
+    #     }
+
+    #     # Find author
+    #     author_link = container.select_one("a[href^='/u/']")
+    #     if author_link:
+    #         result["author_name"] = extract_username_from_url(safe_get_attr(author_link, "href"))
+
+    #     # Find content
+    #     content_elem = container.find("p")
+    #     if content_elem:
+    #         result["description"] = safe_get_text(content_elem)
+
+    #     # Find date
+    #     time_elem = container.find("time")
+    #     if time_elem:
+    #         result["date"] = safe_get_attr(time_elem, "datetime") or safe_get_text(time_elem)
+
+    #     # Find rating
+    #     body_text = container.get_text()
+    #     points_match = re.search(r"(\d+)\s*(?:points?)", body_text, re.I)
+    #     if points_match:
+    #         result["rating"] = int(points_match.group(1))
+
+    #     if result.get("author_name") or result.get("description"):
+    #         comments.append(result)
+
+    # logger.info("Parsed %d comments", len(comments))
+    # return comments
+
+def parse_comments(html: str, post_id: str, max_comments: Optional[int] = 10) -> List[Dict[str, Any]]:
     soup = BeautifulSoup(html, "lxml")
     comments: List[Dict[str, Any]] = []
 
-    # Try different comment selectors
-    comment_containers = (
-        soup.select("div.comment")
-        or soup.select("div[class*='comment']")
-        or soup.select("div.pl-4")
-    )
-
+    comment_containers = soup.select("div.mt-6 div.py-2")
+    counter = 0
     for container in comment_containers:
         result: Dict[str, Any] = {
             "post_id": post_id,
@@ -417,29 +494,35 @@ def parse_comments(html: str, post_id: str) -> List[Dict[str, Any]]:
             "rating": 0,
         }
 
-        # Find author
+        # 2. Autor: Está en un <a> con clase que contiene el color de texto y hover:underline
         author_link = container.select_one("a[href^='/u/']")
         if author_link:
-            result["author_name"] = extract_username_from_url(safe_get_attr(author_link, "href"))
+            result["author_name"] = author_link.get_text(strip=True).replace("u/", "")
 
-        # Find content
-        content_elem = container.find("p")
+        # 3. Contenido: Está en un <p> dentro de un div con clases de 'prose'
+        content_elem = container.select_one("div.prose-invert p")
         if content_elem:
-            result["description"] = safe_get_text(content_elem)
+            result["description"] = content_elem.get_text(strip=True)
 
-        # Find date
-        time_elem = container.find("time")
-        if time_elem:
-            result["date"] = safe_get_attr(time_elem, "datetime") or safe_get_text(time_elem)
+        # Buscamos el span que contiene 'ago' dentro del div de cabecera del comentario
+        header_div = container.select_one("div.flex.items-center.gap-2.text-xs")
+        if header_div:
+            date_text = header_div.get_text(" ", strip=True)
+            if "ago" in date_text:
+                relative_date = date_text.split("ago")[0].strip() + " ago"
+                result["date"] = convert_relative_to_date(relative_date)
 
-        # Find rating
-        body_text = container.get_text()
-        points_match = re.search(r"(\d+)\s*(?:points?)", body_text, re.I)
-        if points_match:
-            result["rating"] = int(points_match.group(1))
+        # 5. Rating: El número está en un span dentro de un contenedor flex gap-1
+        rating_elem = container.select_one("span.flex.items-center.gap-1 span")
+        if rating_elem:
+            try:
+                result["rating"] = int(rating_elem.get_text(strip=True))
+            except ValueError:
+                result["rating"] = 0
 
-        if result.get("author_name") or result.get("description"):
+        if result.get("author_name") and result.get("description"):
             comments.append(result)
-
-    logger.info("Parsed %d comments", len(comments))
+            counter += 1
+            if max_comments and counter > max_comments:
+                break
     return comments
