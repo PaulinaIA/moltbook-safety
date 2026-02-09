@@ -142,6 +142,7 @@ class Post:
     def from_scraped_data(
         cls,
         id_user: str,
+        id: Optional[str] = None,
         title: Optional[str] = None,
         description: Optional[str] = None,
         id_submolt: Optional[str] = None,
@@ -152,7 +153,7 @@ class Post:
         """Create a Post instance from scraped data."""
         # Use URL or title+user for ID generation
         id_source = url or f"{title or ''}-{id_user}"
-        id_post = generate_id("post", id_source)
+        id_post = id or generate_id("post", id_source)
         return cls(
             id_post=id_post,
             id_user=id_user,
