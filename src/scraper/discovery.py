@@ -1,5 +1,5 @@
 """URL discovery for moltbook.com scraping."""
-
+import time
 import logging
 from typing import List, Set
 
@@ -39,6 +39,11 @@ class URLDiscovery:
 
         # Fetch and scroll to load more users
         html = self.scraper.fetch_page(users_url, wait_selector="a[href^='/u/']")
+        # Switch to Karma view to get more users
+        logger.info("Switching to Karma view to fetch the most karma users...")
+        self.scraper.page.click("button:has-text('Karma')")
+        time.sleep(2)
+
         self.scraper.scroll_to_load_all(max_scrolls=5)
         html = self.scraper.page.content()
 
