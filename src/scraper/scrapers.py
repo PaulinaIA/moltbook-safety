@@ -1,9 +1,15 @@
-"""Main scraper orchestration for moltbook.com."""
+"""Main scraper orchestration for moltbook.com.
 
+Uses batch buffer: entities are accumulated and written in chunks (e.g. every 1,000–5,000)
+via bulk_upsert to avoid per-record saves and memory spikes. Flush can run in a thread
+via asyncio for non-blocking writes.
+"""
+
+import asyncio
 import logging
-from typing import List, Optional, Set
+from collections import defaultdict
+from typing import List, Optional, Set, Type, TypeVar
 
-from config.settings import settings
 from src.database.models import Comment, Post, SubMolt, User, UserSubMolt
 from src.database.operations import DatabaseOperations
 from src.scraper.base import BaseScraper
@@ -16,6 +22,59 @@ from src.scraper.parsers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Default batch size for buffer (flush every N records per entity type)
+DEFAULT_BATCH_SIZE = 1000
+
+T = TypeVar("T", User, Post, Comment, SubMolt, UserSubMolt)
+
+
+class BatchWriter:
+    """Buffers entities by type and flushes in chunks via bulk_upsert (no per-record save)."""
+
+    def __init__(self, db_ops: DatabaseOperations, batch_size: int = DEFAULT_BATCH_SIZE):
+        self.db_ops = db_ops
+        self.batch_size = batch_size
+        self._buffers: dict = defaultdict(list)
+
+    def add(self, entity: T) -> None:
+        """Add entity to buffer; flush when buffer size reaches batch_size."""
+        t = type(entity)
+        self._buffers[t].append(entity)
+        if len(self._buffers[t]) >= self.batch_size:
+            self._flush_type(t)
+
+    def _flush_type(self, entity_type: Type[T]) -> int:
+        """Flush buffer for one entity type (bulk_upsert). Returns count written."""
+        buf = self._buffers[entity_type]
+        if not buf:
+            return 0
+        chunk = list(buf)
+        self._buffers[entity_type] = []
+        try:
+            return self._run_bulk_upsert(chunk)
+        except Exception as e:
+            logger.exception("Bulk upsert failed for %s: %s", entity_type.__name__, e)
+            raise
+
+    def _run_bulk_upsert(self, entities: List[T]) -> int:
+        """Run bulk_upsert in a thread via asyncio so the scraper thread is not blocked."""
+        if not entities:
+            return 0
+        try:
+            return asyncio.run(asyncio.to_thread(self.db_ops.bulk_upsert, entities))
+        except RuntimeError:
+            return self.db_ops.bulk_upsert(entities)
+
+    def flush_type(self, entity_type: Type[T]) -> int:
+        """Flush buffer for given entity type (e.g. User before get_by_id)."""
+        return self._flush_type(entity_type)
+
+    def flush_all(self) -> None:
+        """Flush all buffers (call at end of scrape_all or __exit__)."""
+        for entity_type in list(self._buffers.keys()):
+            if self._buffers[entity_type]:
+                self._flush_type(entity_type)
 
 
 class MoltbookScraper:
@@ -33,29 +92,39 @@ class MoltbookScraper:
         self,
         db_ops: Optional[DatabaseOperations] = None,
         headless: bool = True,
+        batch_size: int = DEFAULT_BATCH_SIZE,
     ):
         """Initialize moltbook scraper.
 
         Args:
-            db_ops: Database operations instance
+            db_ops: Database operations instance (uses bulk upsert in chunks)
             headless: Run browser in headless mode
+            batch_size: Flush buffer every N records (default 1000)
         """
         self.db_ops = db_ops or DatabaseOperations()
         self.headless = headless
+        self._batch = BatchWriter(
+            self.db_ops,
+            batch_size=getattr(self.db_ops, "chunk_size", None) or batch_size,
+        )
         self._scraper: Optional[BaseScraper] = None
         self._discovery: Optional[URLDiscovery] = None
 
     def __enter__(self) -> "MoltbookScraper":
         """Enter context manager."""
+        self.db_ops.ensure_tables()
         self._scraper = BaseScraper(headless=self.headless)
         self._scraper.start()
         self._discovery = URLDiscovery(self._scraper)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Exit context manager."""
-        if self._scraper:
-            self._scraper.close()
+        """Exit context manager; flush any remaining buffered records."""
+        try:
+            self._batch.flush_all()
+        finally:
+            if self._scraper:
+                self._scraper.close()
 
     @property
     def scraper(self) -> BaseScraper:
@@ -108,9 +177,7 @@ class MoltbookScraper:
                 user_data = parse_user_profile(html, username)
                 user = User.from_scraped_data(**user_data)
                 users.append(user)
-
-                # Persist immediately
-                self.db_ops.upsert(user)
+                self._batch.add(user)
                 logger.info("Scraped user: %s (karma=%d)", user.name, user.karma)
 
             except Exception as e:
@@ -157,8 +224,7 @@ class MoltbookScraper:
                 submolt_data = parse_submolt_page(html, name)
                 submolt = SubMolt.from_scraped_data(**submolt_data)
                 submolts.append(submolt)
-
-                self.db_ops.upsert(submolt)
+                self._batch.add(submolt)
                 logger.info("Scraped submolt: %s", submolt.name)
 
                 # Also scrape posts from this submolt
@@ -192,19 +258,18 @@ class MoltbookScraper:
         posts_data = parse_posts_from_page(html, submolt_name, max_posts=max_posts)
         posts: List[Post] = []
 
+        self._batch.flush_type(User)
         for post_data in posts_data:
             author_name = post_data.get("author_name")
             if not author_name:
                 continue
 
-            # Get or create user ID
             user = self.db_ops.get_by_id(User, f"user_{author_name.lower()[:12]}")
             if user:
                 user_id = user["id_user"]
             else:
-                # Create minimal user record
                 new_user = User.from_scraped_data(name=author_name)
-                self.db_ops.upsert(new_user)
+                self._batch.add(new_user)
                 user_id = new_user.id_user
 
             id_post = post_data.get("post_url").split("/")[-1]
@@ -219,7 +284,7 @@ class MoltbookScraper:
                 url=post_data.get("post_url"),
             )
             posts.append(post)
-            self.db_ops.upsert(post)
+            self._batch.add(post)
 
 
             try:
@@ -259,22 +324,21 @@ class MoltbookScraper:
         """
         comments_data = parse_comments(html, post_id)
         comments: List[Comment] = []
+        self._batch.flush_type(User)
 
         for comment_data in comments_data:
             author_name = comment_data.get("author_name")
             if not author_name:
                 continue
 
-            # Get or create user ID 
             user_id = None
             user = self.db_ops.get_by_id(User, f"user_{author_name.lower()[:12]}")
             if user:
                 user_id = user["id_user"]
             else:
-                # Create minimal user record
                 new_user = User.from_scraped_data(name=author_name)
-                self.db_ops.upsert(new_user)
-                user_id = new_user.id_user 
+                self._batch.add(new_user)
+                user_id = new_user.id_user
             if not user_id:
                 logger.warning("Could not determine user ID for comment author '%s'", author_name)
                 continue
@@ -286,7 +350,7 @@ class MoltbookScraper:
                 date=comment_data.get("date"),
             )
             comments.append(comment)
-            self.db_ops.upsert(comment)
+            self._batch.add(comment)
 
         logger.debug("Extracted %d comments from page", len(comments))
         return comments
@@ -338,7 +402,7 @@ def run_scraper(
     max_comments: int = 1000,
     headless: bool = True,
 ) -> dict:
-    """Convenience function to run the scraper.
+    """Convenience function to run the scraper (tables created via ensure_tables in __enter__).
 
     Args:
         max_users: Maximum users to scrape
@@ -350,12 +414,6 @@ def run_scraper(
     Returns:
         Dictionary with scrape results
     """
-    # Ensure database is initialized
-    from src.database.connection import init_database, check_database_exists
-
-    if not check_database_exists():
-        init_database()
-
     with MoltbookScraper(headless=headless) as scraper:
         return scraper.scrape_all(
             max_users=max_users,
