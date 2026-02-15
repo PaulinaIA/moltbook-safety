@@ -660,48 +660,83 @@ class PlaywrightFetcher:
         wait_ms: int = 2000,
         entity_type: str = "page",
         entity_name: str = "unknown",
+        retries: int = 2,
     ) -> str:
         """Navego a la URL, espero a que cargue el contenido dinamico,
         guardo en S3 y devuelvo el HTML.
 
-        Args:
-            url: URL a navegar.
-            wait_selector: selector CSS a esperar despues del goto.
-            wait_ms: milisegundos extra de espera para contenido lazy.
-            entity_type: tipo de entidad para el key de S3 (submolt, user, post).
-            entity_name: nombre o ID para el key de S3.
+        Moltbook es un SPA (Next.js) asi que el HTML inicial solo tiene
+        un div con 'Loading...'. Necesito esperar a que el JS renderice
+        el contenido real. Si despues de esperar sigo viendo 'Loading...',
+        reintento desde cero.
         """
-        self._limiter.wait()
-        logger.info("GET %s", url)
+        for attempt in range(retries + 1):
+            self._limiter.wait()
+            if attempt > 0:
+                logger.info("Reintento %d/%d para %s", attempt, retries, url)
+            else:
+                logger.info("GET %s", url)
 
-        try:
-            self.page.goto(url, wait_until="domcontentloaded")
-        except Exception as exc:
-            logger.warning("Timeout en goto %s: %s -- reintento", url, exc)
             try:
-                self.page.goto(url, wait_until="commit")
-            except Exception as exc2:
-                logger.error("Fallo definitivo en %s: %s", url, exc2)
-                raise
-
-        if wait_selector:
-            try:
-                self.page.wait_for_selector(wait_selector, timeout=10000)
-            except Exception:
-                logger.debug("Selector '%s' no aparecio en %s", wait_selector, url)
-
-        self.page.wait_for_timeout(wait_ms)
-        html = self.page.content()
-
-        # Persisto en S3
-        if self._s3:
-            try:
-                self._s3.put(html, entity_type, entity_name)
+                self.page.goto(url, wait_until="domcontentloaded")
             except Exception as exc:
-                logger.warning("No pude guardar HTML en S3 para %s/%s: %s",
-                               entity_type, entity_name, exc)
+                logger.warning("Timeout en goto %s: %s -- reintento con commit", url, exc)
+                try:
+                    self.page.goto(url, wait_until="commit")
+                except Exception as exc2:
+                    logger.error("Fallo definitivo en goto %s: %s", url, exc2)
+                    if attempt < retries:
+                        continue
+                    raise
 
-        return html
+            # Espero a que el SPA renderice. Primero intento el selector especifico,
+            # si no funciona, espero a que desaparezca el Loading...
+            if wait_selector:
+                try:
+                    self.page.wait_for_selector(wait_selector, timeout=15000)
+                except Exception:
+                    logger.warning(
+                        "Selector '%s' no aparecio en %s (intento %d) -- espero mas",
+                        wait_selector, url, attempt + 1,
+                    )
+                    # Fallback: espero a que aparezca cualquier contenido de perfil
+                    try:
+                        self.page.wait_for_selector(
+                            "div.flex-1, main, h1", timeout=10000,
+                        )
+                    except Exception:
+                        pass
+
+            self.page.wait_for_timeout(wait_ms)
+            html = self.page.content()
+
+            # Verifico que el SPA haya renderizado. Si solo veo "Loading..."
+            # sin ningun contenido real, reintento.
+            if "Loading..." in html and 'class="flex-1"' not in html:
+                logger.warning(
+                    "Pagina %s sigue en estado Loading... (intento %d/%d)",
+                    url, attempt + 1, retries + 1,
+                )
+                if attempt < retries:
+                    # Espero un poco mas antes de reintentar
+                    self.page.wait_for_timeout(5000)
+                    html = self.page.content()
+                    if "Loading..." in html and 'class="flex-1"' not in html:
+                        continue
+
+            # Persisto en S3
+            if self._s3:
+                try:
+                    self._s3.put(html, entity_type, entity_name)
+                except Exception as exc:
+                    logger.warning("No pude guardar HTML en S3 para %s/%s: %s",
+                                   entity_type, entity_name, exc)
+
+            return html
+
+        # Si llegamos aqui, todos los reintentos fallaron
+        logger.error("Todos los reintentos fallaron para %s", url)
+        return html  # Devuelvo lo que tenga, aunque sea Loading...
 
     def scroll_and_fetch(
         self,
@@ -799,40 +834,133 @@ def parse_users_list(html: str) -> List[Dict[str, Any]]:
 
 
 def parse_user_profile(html: str, username: str) -> Dict[str, Any]:
+    """Extraigo datos del perfil de un usuario desde el HTML renderizado.
+
+    Estructura real del DOM (renderizado por Next.js):
+      div.flex.items-start.gap-4 > div.flex-1
+        [0] div.flex.items-center.gap-2    -> h1 (username) + verified badge
+        [1] p.mt-1                          -> bio/description
+        [2] div.flex.flex-wrap...mt-3       -> stats row (karma, followers, following, joined)
+        [3] div.mt-4.pt-4.border-t          -> human owner section con link a X
+    """
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(html, "lxml")
     result: Dict[str, Any] = {
         "name": username, "karma": 0, "description": None,
         "human_owner": None, "joined": None, "followers": 0, "following": 0,
     }
-    body = soup.get_text()
-    for pat in [r"(\d+(?:\.\d+)?[KkMm]?)\s*karma", r"karma[:\s]*(\d+(?:\.\d+)?[KkMm]?)"]:
-        m = re.search(pat, body, re.I)
+
+    # Busco el bloque principal del perfil
+    profile_block = soup.select_one("div.flex.items-start.gap-4 > div.flex-1")
+
+    # -- Bio / descripcion --
+    # Esta en un <p> con clase mt-1 dentro del bloque de perfil
+    if profile_block:
+        bio_el = profile_block.select_one("p.mt-1")
+        if bio_el:
+            result["description"] = bio_el.get_text(strip=True)
+    if not result["description"]:
+        for sel in ("p.mt-1", "p.text-gray-400"):
+            el = soup.select_one(sel)
+            if el:
+                text = el.get_text(strip=True)
+                # Filtro la descripcion generica del sitio
+                if text and "social network" not in text.lower():
+                    result["description"] = text
+                    break
+
+    # -- Stats row: karma, followers, following, joined --
+    # El row de stats tiene clase "flex flex-wrap items-center gap-4 mt-3"
+    stats_row = (
+        profile_block.select_one("div.mt-3")
+        if profile_block
+        else soup.select_one("div.flex.flex-wrap.items-center.mt-3")
+    )
+    if stats_row:
+        stat_divs = stats_row.select("div.text-sm")
+        for div in stat_divs:
+            text = div.get_text(" ", strip=True).lower()
+            # Karma: <span class="font-bold">1876</span> karma
+            if "karma" in text:
+                num_el = div.select_one("span.font-bold")
+                if num_el:
+                    result["karma"] = _parse_number(num_el.get_text(strip=True))
+            elif "follower" in text:
+                num_el = div.select_one("span.font-bold")
+                if num_el:
+                    result["followers"] = _parse_number(num_el.get_text(strip=True))
+            elif "following" in text:
+                num_el = div.select_one("span.font-bold")
+                if num_el:
+                    result["following"] = _parse_number(num_el.get_text(strip=True))
+            elif "joined" in text:
+                # Formato: "🎂 Joined 1/29/2026"
+                m = re.search(r"joined\s+(\S+)", text, re.I)
+                if m:
+                    result["joined"] = m.group(1)
+
+    # Fallback con regex si no encontre stats por DOM
+    if result["karma"] == 0:
+        body = soup.get_text(" ", strip=True)
+        m = re.search(r"(\d+(?:\.\d+)?[KkMm]?)\s*karma", body, re.I)
         if m:
             result["karma"] = _parse_number(m.group(1))
-            break
-    meta = soup.find("meta", {"name": "description"})
-    if meta and meta.get("content"):
-        result["description"] = meta["content"]
-    for sel in ("p.bio", "div.description", "p.text-gray-400"):
-        el = soup.select_one(sel)
-        if el:
-            result["description"] = el.get_text(strip=True)
-            break
-    tw = soup.select_one("a[href*='twitter.com'], a[href*='x.com']")
-    if tw and tw.get("href"):
-        mm = re.search(r"(?:twitter\.com|x\.com)/(@?\w+)", tw["href"])
-        if mm:
-            result["human_owner"] = mm.group(1)
-    j = re.search(r"joined\s+(.+?)(?:\s*\||$)", body, re.I)
-    if j:
-        result["joined"] = j.group(1).strip()
-    ff = re.search(r"(\d+(?:\.\d+)?[KkMm]?)\s*followers?", body, re.I)
-    if ff:
-        result["followers"] = _parse_number(ff.group(1))
-    fl = re.search(r"(\d+(?:\.\d+)?[KkMm]?)\s*following", body, re.I)
-    if fl:
-        result["following"] = _parse_number(fl.group(1))
+
+    # -- Human owner --
+    # Esta en un div.mt-4.pt-4.border-t que contiene link a x.com
+    owner_section = (
+        profile_block.select_one("div.mt-4.pt-4.border-t")
+        if profile_block
+        else soup.select_one("div.mt-4.pt-4.border-t")
+    )
+    if owner_section:
+        x_link = owner_section.select_one('a[href*="x.com"], a[href*="twitter.com"]')
+        if x_link and x_link.get("href"):
+            mm = re.search(r"(?:twitter\.com|x\.com)/(@?\w+)", x_link["href"])
+            if mm:
+                result["human_owner"] = mm.group(1)
+        # Si no hay link a X, busco el texto del nombre del owner
+        if not result["human_owner"]:
+            header = owner_section.select_one("div.text-xs")
+            if header:
+                # Hay un nombre o handle despues del header
+                name_el = owner_section.select_one("span.font-bold, span.text-white")
+                if name_el:
+                    result["human_owner"] = name_el.get_text(strip=True)
+    else:
+        # Fallback: primer link a x.com que no sea del footer
+        for a in soup.select('a[href*="x.com"], a[href*="twitter.com"]'):
+            href = a.get("href", "")
+            if "mattprd" in href:
+                continue
+            mm = re.search(r"(?:twitter\.com|x\.com)/(@?\w+)", href)
+            if mm:
+                result["human_owner"] = mm.group(1)
+                break
+
+    # -- Joined (fallback si no lo saque de stats) --
+    if not result["joined"]:
+        body = soup.get_text(" ", strip=True)
+        j = re.search(r"Joined\s+(\d{1,2}/\d{1,2}/\d{4})", body)
+        if j:
+            result["joined"] = j.group(1)
+        else:
+            j2 = re.search(r"Joined\s+(.+?)(?:\s+Online|\s*$)", body)
+            if j2:
+                result["joined"] = j2.group(1).strip()[:30]
+
+    # -- Followers/following fallback --
+    if result["followers"] == 0 and profile_block:
+        body = profile_block.get_text(" ", strip=True)
+        ff = re.search(r"(\d+(?:\.\d+)?[KkMm]?)\s*followers?", body, re.I)
+        if ff:
+            result["followers"] = _parse_number(ff.group(1))
+    if result["following"] == 0 and profile_block:
+        body = profile_block.get_text(" ", strip=True)
+        fl = re.search(r"(\d+(?:\.\d+)?[KkMm]?)\s*following", body, re.I)
+        if fl:
+            result["following"] = _parse_number(fl.group(1))
+
     return result
 
 
@@ -1026,6 +1154,7 @@ class MoltbookScraper:
         self._fetcher = fetcher
         self._batch = BatchWriter(db, batch_size=batch_size)
         self._user_submolt_seen: Set[tuple] = set()
+        self._enriched_users: Set[str] = set()
 
     def __enter__(self) -> "MoltbookScraper":
         self.db.ensure_tables()
@@ -1087,36 +1216,6 @@ class MoltbookScraper:
         all_names = new_names + old_names
         return all_names[:max_submolts]
 
-    def _discover_users(self, max_users: int) -> List[str]:
-        """Descubro usuarios desde /u con Playwright."""
-        discovered: List[str] = []
-        try:
-            html = self._fetcher.scroll_and_fetch(
-                f"{BASE_URL}/u",
-                max_scrolls=5,
-                entity_type="listing",
-                entity_name="users",
-            )
-            # Intento cambiar a la vista Karma si hay boton
-            try:
-                self._fetcher.page.click("button:has-text('Karma')", timeout=3000)
-                self._fetcher.page.wait_for_timeout(2000)
-                html = self._fetcher.page.content()
-            except Exception:
-                pass
-            for item in parse_users_list(html):
-                name = item.get("name", "")
-                if name:
-                    discovered.append(name)
-            logger.info("Descubri %d usuarios desde /u", len(discovered))
-        except Exception as exc:
-            logger.warning("No pude navegar /u: %s", exc)
-
-        known = set(self.db.get_user_names())
-        new_names = [n for n in discovered if n not in known]
-        old_names = [n for n in discovered if n in known]
-        return (new_names + old_names)[:max_users]
-
     # -- pipeline principal -------------------------------------------------
 
     def scrape_all(
@@ -1126,11 +1225,11 @@ class MoltbookScraper:
         max_posts: int = 10,
         max_comments: int = 100,
     ) -> Dict[str, int]:
-        """Pipeline completo:
-        1. Scrapeo submolts (con posts y comentarios)
-        2. Enriquezco perfiles de usuarios descubiertos
+        """Pipeline completo. Enriquezco usuarios de forma incremental
+        despues de cada submolt para que si interrumpen el ETL,
+        los datos de perfil ya esten en la DB.
         """
-        # --- 1. Submolts ---
+        # --- 1. Submolts + enrichment intercalado ---
         submolt_names = self._discover_submolts(max_submolts)
         logger.info("Procesando %d submolts", len(submolt_names))
 
@@ -1154,25 +1253,37 @@ class MoltbookScraper:
                 submolts_ok += 1
 
                 logger.info("Submolt: %s", submolt.name)
-                self._process_posts(html, submolt, max_posts, max_comments)
+                new_authors = self._process_posts(html, submolt, max_posts, max_comments)
+
+                # Enriquezco inmediatamente los usuarios descubiertos en este submolt
+                pending = [n for n in new_authors if n not in self._enriched_users]
+                if pending:
+                    logger.info(
+                        "Enriqueciendo %d usuarios descubiertos en m/%s",
+                        len(pending), name,
+                    )
+                    self._enrich_user_profiles(pending)
 
             except Exception as exc:
                 logger.error("Error en submolt %s: %s", name, exc)
 
         self._batch.flush_all()
 
-        # --- 2. Usuarios ---
-        user_names = self._discover_users(max_users)
-        # Tambien agrego usuarios que descubri de posts/comentarios
+        # --- 2. Sweep final: usuarios que quedaron sin enriquecer ---
         db_users = self.db.get_user_names()
-        all_user_names = list(dict.fromkeys(user_names + db_users))
-        users_enriched = self._enrich_user_profiles(all_user_names[:max_users])
+        remaining = [n for n in db_users if n not in self._enriched_users]
+        if remaining:
+            logger.info(
+                "Sweep final: %d usuarios pendientes de enriquecer",
+                len(remaining),
+            )
+            self._enrich_user_profiles(remaining)
 
         self._batch.flush_all()
 
         return {
             "users": self.db.count(User),
-            "users_enriched": users_enriched,
+            "users_enriched": len(self._enriched_users),
             "submolts": submolts_ok,
             "posts": self.db.count(Post),
             "comments": self.db.count(Comment),
@@ -1180,39 +1291,77 @@ class MoltbookScraper:
         }
 
     def _enrich_user_profiles(self, user_names: List[str]) -> int:
-        """Visito /u/{name} para obtener karma, bio, etc."""
-        logger.info("Enriqueciendo %d perfiles de usuario", len(user_names))
+        """Visito /u/{name} para obtener karma, bio, etc.
+        Flusheo cada usuario enriquecido inmediatamente a la DB
+        para que no se pierdan datos si el ETL se interrumpe."""
         enriched = 0
+        logger.info("Enriqueciendo %d perfiles de usuario...", len(user_names))
         for name in user_names:
+            if name in self._enriched_users:
+                continue
             try:
                 url = f"{BASE_URL}/u/{name}"
+                logger.info("Visitando perfil: %s", url)
+
+                # Espero al row de stats (karma, followers) que confirma que
+                # el JS termino de renderizar el perfil completo
                 html = self._fetcher.fetch(
                     url,
-                    wait_selector="h1, h2",
-                    wait_ms=2000,
+                    wait_selector="div.flex.flex-wrap.items-center.gap-4.mt-3",
+                    wait_ms=3000,
                     entity_type="user",
                     entity_name=name,
+                    retries=2,
                 )
+
+                # Verifico que el HTML contenga contenido de perfil
+                if "Loading..." in html and "karma" not in html.lower():
+                    logger.warning(
+                        "Perfil %s no renderizo correctamente -- HTML tiene Loading...",
+                        name,
+                    )
+                    continue
+
                 data = parse_user_profile(html, name)
+
+                # Si no obtuve nada util, lo reporto pero igual guardo
+                if data.get("karma", 0) == 0 and not data.get("description"):
+                    logger.warning(
+                        "Perfil %s: parser no encontro datos (karma=0, desc=None). "
+                        "Puede que la pagina no haya cargado bien.",
+                        name,
+                    )
+
                 user = User.from_scraped_data(**data)
                 self._batch.add(user)
+                # Flusheo inmediatamente para que el dato quede en la DB
+                self._batch.flush_type(User)
+                self._enriched_users.add(name)
                 enriched += 1
-                if data.get("karma", 0) > 0:
-                    logger.info("Enriquecido: %s (karma=%d)", name, data.get("karma", 0))
+                logger.info(
+                    "Enriquecido: %s (karma=%d, followers=%d, joined=%s, "
+                    "owner=%s, desc=%s)",
+                    name, data.get("karma", 0), data.get("followers", 0),
+                    data.get("joined"), data.get("human_owner"),
+                    (data.get("description") or "")[:50],
+                )
             except Exception as exc:
                 logger.warning("No pude enriquecer perfil %s: %s", name, exc)
 
-        self._batch.flush_type(User)
+        logger.info("Enrichment terminado: %d perfiles enriquecidos", enriched)
         return enriched
 
     def _process_posts(self, submolt_html: str, submolt: SubMolt,
-                       max_posts: int, max_comments: int) -> None:
+                       max_posts: int, max_comments: int) -> List[str]:
+        """Proceso posts de un submolt. Devuelvo la lista de autores descubiertos."""
+        discovered_authors: Set[str] = set()
         posts_data = parse_posts_from_page(submolt_html, submolt.name, max_posts=max_posts)
 
         for pd in posts_data:
             author_name = pd.get("author_name")
             if not author_name:
                 continue
+            discovered_authors.add(author_name)
 
             self._batch.flush_type(User)
             user_id = self._resolve_user_id(author_name)
@@ -1248,13 +1397,19 @@ class MoltbookScraper:
                         entity_name=post_name,
                     )
                     self._process_comments(
-                        post_html, post.id_post, submolt.id_submolt, max_comments
+                        post_html, post.id_post, submolt.id_submolt, max_comments,
+                        discovered_authors=discovered_authors,
                     )
                 except Exception as exc:
                     logger.error("Error en comentarios de %s: %s", post_url, exc)
 
+        return list(discovered_authors)
+
     def _process_comments(self, html: str, post_id: str,
-                          submolt_id: str, max_comments: int) -> None:
+                          submolt_id: str, max_comments: int,
+                          discovered_authors: Optional[Set[str]] = None) -> None:
+        if discovered_authors is None:
+            discovered_authors = set()
         comments_data = parse_comments(html, post_id, max_comments=max_comments)
 
         for cd in comments_data:
@@ -1265,6 +1420,7 @@ class MoltbookScraper:
             self._batch.flush_type(User)
             user_id = self._resolve_user_id(author_name)
             self._batch.flush_type(User)
+            discovered_authors.add(author_name)
 
             self._register_user_submolt(user_id, submolt_id)
             self._batch.flush_type(UserSubMolt)
@@ -1290,11 +1446,11 @@ def main() -> None:
 
     db_host = params.get("DB_HOST", "moltbook.ce3qywi6qo2c.us-east-1.rds.amazonaws.com")
     db_port = int(params.get("DB_PORT", "5432"))
-    db_name = params.get("DB_NAME", "postgres")
+    db_name = params.get("DB_NAME", "moltbook")
     db_user = params.get("DB_USER", "postgres")
     db_password = params.get("DB_PASSWORD", "Cl6rS2FxuKTkp2lQ")
     batch_size = int(params.get("BATCH_SIZE", "50"))
-    max_users = int(params.get("MAX_USERS", "10"))
+    max_users = int(params.get("MAX_USERS", "30"))
     s3_bucket = params.get("S3_HTML_BUCKET", "")
 
     if not db_host or not db_name:
@@ -1334,9 +1490,9 @@ def main() -> None:
         with MoltbookScraper(db=db, fetcher=fetcher, batch_size=batch_size) as scraper:
             result = scraper.scrape_all(
                 max_users=max_users,
-                max_submolts=50,
-                max_posts=10,
-                max_comments=100,
+                max_submolts=10,
+                max_posts=20,
+                max_comments=5,
             )
         logger.info("ETL terminado: %s", result)
     except Exception as exc:
