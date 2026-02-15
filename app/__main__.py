@@ -94,6 +94,82 @@ def scrape(
     click.echo(f"Comments: {results.get('comments', 0)}")
 
 
+@cli.command(name="scrape-massive")
+@click.option("--max-users", default=50000, help="Maximum users to scrape")
+@click.option("--max-submolts", default=500, help="Maximum submolts to scrape")
+@click.option("--max-posts", default=500, help="Maximum posts per submolt page")
+@click.option("--max-comments", default=500, help="Maximum comments per post page")
+@click.option("--workers", default=10, help="Number of parallel browser pages")
+@click.option("--rate-limit", default=0.5, help="Seconds between requests per worker")
+@click.option("--headless/--no-headless", default=True, help="Run browser headless")
+def scrape_massive(
+    max_users: int,
+    max_submolts: int,
+    max_posts: int,
+    max_comments: int,
+    workers: int,
+    rate_limit: float,
+    headless: bool,
+) -> None:
+    """Massive parallel scraping using async Playwright.
+
+    Uses multiple browser pages in parallel for high-throughput scraping.
+    Designed to collect 200K+ records for large dataset requirements.
+    """
+    import asyncio
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting massive parallel scrape pipeline")
+
+    from src.database.connection import init_database, check_database_exists
+    from src.scraper.async_scrapers import run_massive_scraper
+
+    if not check_database_exists():
+        logger.info("Initializing database")
+        init_database()
+
+    results = asyncio.run(run_massive_scraper(
+        max_users=max_users,
+        max_submolts=max_submolts,
+        max_posts_per_submolt=max_posts,
+        max_comments_per_post=max_comments,
+        max_workers=workers,
+        rate_limit=rate_limit,
+        headless=headless,
+    ))
+
+    click.echo("\n--- Massive Scrape Results ---")
+    click.echo(f"New Users:      {results.get('new_users', 0)}")
+    click.echo(f"New SubMolts:   {results.get('new_submolts', 0)}")
+    click.echo(f"New Posts:       {results.get('new_posts', 0)}")
+    click.echo(f"\n--- Database Totals ---")
+    click.echo(f"Total Users:    {results.get('total_users', 0)}")
+    click.echo(f"Total Posts:    {results.get('total_posts', 0)}")
+    click.echo(f"Total Comments: {results.get('total_comments', 0)}")
+    click.echo(f"Total SubMolts: {results.get('total_submolts', 0)}")
+    click.echo(f"\nGrand Total:    {results.get('total_records', 0)} records")
+    click.echo(f"Time elapsed:   {results.get('elapsed_seconds', 0)}s")
+
+
+@cli.command(name="init-db")
+@click.option("--postgres", is_flag=True, help="Initialize PostgreSQL database")
+def init_db(postgres: bool) -> None:
+    """Initialize the database schema."""
+    logger = logging.getLogger(__name__)
+
+    if postgres:
+        # Temporarily override db_type
+        settings.db_type = "postgres"
+
+    from src.database.connection import init_database, check_database_exists
+
+    if check_database_exists():
+        click.echo(f"Database already initialized ({settings.db_type})")
+    else:
+        init_database()
+        click.echo(f"Database initialized ({settings.db_type})")
+
+
 @cli.command()
 def build() -> None:
     """Build silver and gold data layers.

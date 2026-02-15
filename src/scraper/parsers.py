@@ -322,17 +322,20 @@ def convert_relative_to_date(text: str) -> str:
     value = int(match.group(1))
     unit = match.group(2)
 
-    if 'd' in unit:
-        date_obj = now - timedelta(days=value)
-    elif 'h' in unit:
-        date_obj = now - timedelta(hours=value)
-    elif 'm' in unit: # minutos
-        date_obj = now - timedelta(minutes=value)
-    elif 'w' in unit:
-        date_obj = now - timedelta(weeks=value)
-    elif 'mo' in unit: # meses (aproximación de 30 días)
-        date_obj = now - timedelta(days=value * 30)
-    else:
+    try:
+        if 'd' in unit:
+            date_obj = now - timedelta(days=value)
+        elif 'h' in unit:
+            date_obj = now - timedelta(hours=value)
+        elif 'm' in unit: # minutos
+            date_obj = now - timedelta(minutes=value)
+        elif 'w' in unit:
+            date_obj = now - timedelta(weeks=value)
+        elif 'mo' in unit: # meses (aproximación de 30 días)
+            date_obj = now - timedelta(days=value * 30)
+        else:
+            date_obj = now
+    except (OverflowError, ValueError):
         date_obj = now
 
     return date_obj.strftime("%Y-%m-%d")

@@ -98,6 +98,13 @@ class Settings(BaseSettings):
         description="Run browser in headless mode",
     )
 
+    # Concurrency settings
+    max_concurrent_pages: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum concurrent browser pages for async scraping",
+    )
+
     # Processing settings
     batch_size: int = Field(
         default=1000,

@@ -23,19 +23,25 @@ logger = logging.getLogger(__name__)
 def load_table_to_lazy(table_name: str) -> pl.LazyFrame:
     """Load a database table into a Polars LazyFrame.
 
+    Supports both SQLite and PostgreSQL based on settings.db_type.
+
     Args:
         table_name: Name of the table to load
 
     Returns:
         LazyFrame with table contents
     """
-    db_path = settings.project_root / settings.db_path
-
-    # Read from SQLite using Polars
     query = f"SELECT * FROM {table_name}"
+
+    if settings.db_type == "postgres":
+        uri = settings.postgres_url
+    else:
+        db_path = settings.project_root / settings.db_path
+        uri = f"sqlite:///{db_path}"
+
     df = pl.read_database_uri(
         query=query,
-        uri=f"sqlite:///{db_path}",
+        uri=uri,
     )
 
     logger.info("Loaded %d rows from %s", len(df), table_name)

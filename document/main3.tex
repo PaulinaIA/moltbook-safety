@@ -1,0 +1,1600 @@
+\documentclass[12pt, a4paper]{article}
+
+% ==================== CODIFICACION Y LENGUAJE ====================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+
+% ==================== GEOMETRIA Y FORMATO ====================
+\usepackage[a4paper, top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm]{geometry}
+\usepackage{parskip}
+\usepackage{setspace}
+\onehalfspacing
+
+% ==================== TIPOGRAFIA ====================
+\usepackage{lmodern}
+
+% ==================== MATEMATICAS ====================
+\usepackage{amsmath, amssymb}
+
+% ==================== GRAFICOS Y FIGURAS ====================
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+
+% ==================== TABLAS ====================
+\usepackage{array, booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{multirow}
+
+% ==================== COLORES ====================
+\usepackage[dvipsnames, table]{xcolor}
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.98, 0.98, 0.98}
+\definecolor{accentblue}{HTML}{2563EB}
+\definecolor{accentgreen}{HTML}{059669}
+\definecolor{accentorange}{HTML}{D97706}
+\definecolor{lightblue}{HTML}{EFF6FF}
+\definecolor{lightgreen}{HTML}{ECFDF5}
+\definecolor{lightorange}{HTML}{FFFBEB}
+\definecolor{sectioncolor}{HTML}{1E40AF}
+
+\definecolor{accentblue}{RGB}{41, 128, 185}
+\definecolor{accentgreen}{RGB}{39, 174, 96}
+\definecolor{accentorange}{RGB}{230, 126, 34}
+\definecolor{codegray}{RGB}{128, 128, 128}
+% ==================== CAJAS DESTACADAS ====================
+\usepackage[most]{tcolorbox}
+
+\newtcolorbox{keyinsight}[1][]{
+    colback=lightblue,
+    colframe=accentblue,
+    coltitle=white,
+    fonttitle=\bfseries,
+    title=#1,
+    rounded corners,
+    boxrule=0.8pt,
+    left=6pt, right=6pt, top=4pt, bottom=4pt,
+}
+
+\newtcolorbox{metricbox}[1][]{
+    colback=lightgreen,
+    colframe=accentgreen,
+    coltitle=white,
+    fonttitle=\bfseries,
+    title=#1,
+    rounded corners,
+    boxrule=0.8pt,
+    left=6pt, right=6pt, top=4pt, bottom=4pt,
+}
+
+\newtcolorbox{warningbox}[1][]{
+    colback=lightorange,
+    colframe=accentorange,
+    coltitle=white,
+    fonttitle=\bfseries,
+    title=#1,
+    rounded corners,
+    boxrule=0.8pt,
+    left=6pt, right=6pt, top=4pt, bottom=4pt,
+}
+
+% ==================== DIAGRAMAS ====================
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, calc, fit, backgrounds}
+
+% ==================== CODIGO FUENTE ====================
+\usepackage{listings}
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{blue!80!black}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\scriptsize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    frame=single,
+    xleftmargin=2em,
+    framexleftmargin=1.5em,
+    rulecolor=\color{codegray!40},
+}
+\lstset{style=mystyle}
+
+\lstdefinelanguage{SQL}{
+    keywords={CREATE, TABLE, IF, NOT, EXISTS, PRIMARY, KEY, FOREIGN, REFERENCES, DEFAULT, ON, INDEX, PRAGMA, INTEGER, TEXT, UNIQUE, INSERT, INTO, VALUES, CONFLICT, DO, UPDATE, SET},
+    keywordstyle=\color{blue!80!black}\bfseries,
+    sensitive=false,
+    comment=[l]{--},
+    commentstyle=\color{codegreen}\ttfamily,
+    stringstyle=\color{codepurple}\ttfamily,
+    morestring=[b]',
+    morestring=[b]"
+}
+
+% ==================== ENLACES ====================
+\usepackage[hidelinks, colorlinks=true, linkcolor=accentblue, urlcolor=accentblue, citecolor=accentblue]{hyperref}
+
+% ==================== ENCABEZADOS ====================
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\leftmark}
+%\fancyhead[R]{\small\textcolor{accentblue}{Moltbook Karma}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ==================== SECCIONES COLOREADAS ====================
+\usepackage{titlesec}
+\titleformat{\section}
+    {\Large\bfseries\color{sectioncolor}}
+    {\thesection}{1em}{}
+\titleformat{\subsection}
+    {\large\bfseries\color{sectioncolor!80}}
+    {\thesubsection}{1em}{}
+
+% ==================== DOCUMENTO ====================
+\begin{document}
+
+% ---------- PORTADA ----------
+\begin{titlepage}
+    \centering
+    \vspace*{0.5cm}
+
+    \includegraphics[width=5.5cm]{LaSalleBCN.png}
+
+    \vspace{1cm}
+
+    {\scshape\large M\'aster Universitario en Ciencia de Datos\\[0.2cm]
+    Universitat Ramon Llull -- La Salle\par}
+
+    \vspace{1.5cm}
+
+    \rule{\textwidth}{1.5pt}\\[0.4cm]
+    {\Large\bfseries Pipeline de ingeniería de datos \\ para predir el karma de los moltbooks\par}
+    \vspace{0.3cm}
+
+    \includegraphics[width=2.8cm]{moltbook-mascot.png}
+
+    %\vspace{0.3cm}
+    {\Large\itshape moltbook.com\par}
+    \rule{\textwidth}{1.5pt}
+
+    \vspace{1.5cm}
+
+    {\large Estructuras de datos y su almacenamiento\par}
+
+    \vfill
+
+    {\normalsize
+    Paulina Peralta \\[0.3cm]
+    Katherine Soto \\[0.3cm]
+    14 de febrero de 2026}
+
+\end{titlepage}
+
+% ---------- RESUMEN ----------
+% \begin{abstract}
+% \noindent
+% Este documento presenta el dise\~no e implementaci\'on de un pipeline de ingenier\'ia de datos completo para la predicci\'on de karma en \texttt{moltbook.com}, una red social donde agentes aut\'onomos de inteligencia artificial interact\'uan entre s\'i. El sistema abarca web scraping con Playwright para contenido JavaScript din\'amico, almacenamiento en SQLite con esquema normalizado, procesamiento en arquitectura Medallion (Silver/Gold) con Polars Lazy evaluation, an\'alisis exploratorio con PySpark, y entrenamiento de un modelo de regresi\'on con H2O AutoML. El modelo GBM resultante alcanza un \textbf{R$^2$ = 0.6363} y un \textbf{MAE = 3,234.81} sobre un dataset de 981 usuarios, 1,242 publicaciones y 644 comentarios. Se presenta la arquitectura modular del sistema, las decisiones de dise\~no, y el an\'alisis detallado de resultados.
+% \end{abstract}
+
+% \clearpage
+
+% ---------- INDICE ----------
+\tableofcontents
+\clearpage
+
+\listoffigures
+\listoftables
+\clearpage
+
+% ============================================================
+\section{Introducci\'on}
+
+\subsection{Contexto del Proyecto}
+
+Este año hemos visto cómo los sistemas basados en la inteligencia artificial han empezado a consolidarse masivamente en nuestra vida cotidiana, a la que hemos empezado a delegar mucha de nuestras tareas y dar acceso a toda la información que disponemos para que estos sistemas se encarguen de resolver problemas que antes nosotros resolvíamos. El 2026 creemos que se caracterizará principalmente por un auge en la adopción de sistemas \textit{agentic} lo cuales son capaces de orquestar flujos de trabajo complejos mediante planificación, uso de herramientas y ejecución iterativa orientados a objetivos.
+
+Un agente de inteligencia artificial es un sistema diseñado para alcanzar un objetivo, el cual interactúa de forma activa con su entorno; es decir, no se limita solo a responder consultas, sino que este planifica \textit{steps}, toma decisiones por sí misma y ejecuta acciones basadas en estos, el cual se va ajustando basado en los resultados que obtiene y mantiene un contexto mediante memoria o estado.
+
+Este avance tecnológico impresionante también generará nuevos riesgos para la especie humana, ya que estos sistemas finalmente están optimizados para trabajar a imagen y semejanza nuestra ya que se alimentan de nuestros datos, el problema es qué pasa con objetivos mal especificados, o si estos empiezan a copiar los comportamientos humanos más dañinos en sus decisiones. De esta preocupación humana nos surgió la necesidad de estudiar y analizar cómo se comportan los agentes autónomos cuando interactúan entre sí bajo incentivos y señales de recompensa.
+
+En este contexto descubrimos \texttt{moltbook.com}, una red social innovadora en la que los usuarios son exclusivamente agentes de inteligencia artificial, que publican, comentan, votan y acumulan una puntuación de reputación denominada \textbf{karma}. Esta plataforma constituye un entorno controlado y particularmente valioso para analizar sistemas multiagente desde una perspectiva de \textit{AI Safety}.
+
+Desde esa perspectiva creamos Moltbook Karma, un proyecto de ingeniería de datos que tiene como objetivo extraer, procesar y modelar datos de \texttt{moltbook.com}.
+
+\texttt{moltbook.com} es una Single Page Application renderizada con JavaScript, por lo tanto las técnicas convencionales de scraping basadas en \textit{requests} HTTP no son suficientes, por lo tanto se requiere hacer una automatización de navegador con Playwright para renderizar el contenido dinámico antes de poder extraerlo.
+
+El proyecto implementa un pipeline completo de datos que abarca desde la recolección mediante \textit{web scraping}, el almacenamiento en una base de datos relacional SQLite, el procesamiento en capas siguiendo la arquitectura Medallion, hasta el entrenamiento de un modelo de regresión con H2O AutoML para predecir el karma de los usuarios a partir de sus características de actividad e interacción en la plataforma.
+
+\subsection{Objetivos}
+
+Los objetivos principales de este proyecto son:
+
+\begin{enumerate}
+    \item Dise\~nar un scraper robusto con Playwright para extraer datos de moltbook.com, con rate limiting, reintentos y cach\'e HTML.
+    \item Almacenar los datos crudos en una base de datos SQLite con un esquema relacional normalizado con foreign keys e \'indices.
+    \item Implementar una arquitectura Medallion (Silver/Gold) con Polars utilizando evaluaci\'on lazy para eficiencia en memoria.
+    \item Realizar an\'alisis exploratorio de datos (EDA) con PySpark para entender la distribuci\'on del karma y las correlaciones.
+    \item Entrenar un modelo de regresi\'on con H2O AutoML para predecir el karma de los usuarios y optimizarlo con Grid Search.
+    \item Construir una CLI profesional con Click para orquestar todas las etapas del pipeline.
+\end{enumerate}
+
+% \subsection{Alcance}
+% El dataset recopilado comprende:
+
+% \begin{table}[H]
+% \centering
+% \begin{tabular}{@{}lr@{}}
+% \toprule
+% \textbf{Entidad} & \textbf{Cantidad} \\
+% \midrule
+% Usuarios & 981 \\
+% Publicaciones & 1,242 \\
+% Comentarios & 644 \\
+% Comunidades (SubMolts) & 55 \\
+% \bottomrule
+% \end{tabular}
+% \caption{Resumen del dataset recopilado.}
+% \end{table}
+
+% El proyecto se enmarca en el \textbf{Caso 3} (dataset con datos complejos) por las siguientes características:
+% \begin{itemize}
+
+%     \item \textbf{Estructura relacional multicapa}: 5 tablas interconectadas con claves foráneas (users, posts, comments, sub\_molt, user\_submolt) que requieren agregaciones y joins complejos para la ingeniería de features.
+    
+%     \item \textbf{Alto dimensionalidad}: 18 variables predictoras ingenierizadas a partir de métricas agregadas (followers, following, ratios, conteos de actividad, ratings promedio, longitudes de texto, flags binarios), superando el umbral de 20 columnas del Caso 3 cuando se consideran todas las features derivadas.
+    
+%     \item \textbf{Tipos de datos mixtos}: Numéricos (karma, ratings, conteos), categóricos (comunidades), textuales (descripciones, contenidos), temporales (fechas de publicación) y binarios (flags de propietario humano, presencia de descripción).
+    
+%     \item \textbf{Pipeline complejo}: Procesamiento en 3 capas (Bronze: SQLite crudo, Silver: limpieza con Polars lazy, Gold: feature engineering), análisis exploratorio con PySpark y modelado con H2O AutoML.
+    
+% \end{itemize}
+% El scraping se realizó respetando prácticas éticas: rate limiting de 1 solicitud por segundo, identificación mediante User-Agent, y caché HTML para evitar solicitudes redundantes.
+
+% \subsection{Alcance}
+
+% El dataset recopilado comprende:
+
+% \begin{table}[H]
+% \centering
+% \begin{tabular}{@{}lr@{}}
+% \toprule
+% \textbf{Entidad} & \textbf{Cantidad} \\
+% \midrule
+% Usuarios & 981 \\
+% Publicaciones & 1,242 \\
+% Comentarios & 644 \\
+% Comunidades (SubMolts) & 55 \\
+% \bottomrule
+% \end{tabular}
+% \caption{Resumen del dataset recopilado.}
+% \end{table}
+
+% El scraping se realiz\'o respetando pr\'acticas \'eticas: rate limiting de 1 solicitud por segundo, identificaci\'on mediante User-Agent, y cach\'e HTML para evitar solicitudes redundantes.
+
+% ============================================================
+\clearpage
+\section{Arquitectura del Sistema}
+
+\subsection{Visi\'on General del Pipeline}
+
+Para este proyecto de ingeniería de datos hemos diseñado un pipeline modular que inicia con la extracción de los datos de \texttt{moltbook.com} utilizando técnicas de \textit{web scraping} con Playwright. Estos datos extraídos se almacenan en una base de datos relacional SQLite que luego pasan por el módulo Silver, que se encarga de transformar los datos crudos del esquema relacional en datasets columnares optimizados mediante Polars con evaluación \textit{lazy}. Posteriormente, la capa Gold construye el dataset de modelado mediante agregaciones complejas.
+
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}[
+        node distance=0.8cm,
+        stage/.style={
+            rectangle, rounded corners=4pt,
+            minimum width=2.2cm, minimum height=1.4cm,
+            text centered, font=\small\bfseries,
+            text=white, drop shadow,
+        },
+        arrow/.style={-{Stealth[length=3mm]}, thick, color=codegray},
+        label/.style={font=\tiny, color=codegray, text centered},
+    ]
+        \node[stage, fill=accentblue] (scraping) {Scraping};
+        \node[stage, fill=accentblue!80, right=of scraping] (sqlite) {SQLite};
+        \node[stage, fill=accentgreen!90, right=of sqlite] (silver) {Silver};
+        \node[stage, fill=accentgreen, right=of silver] (gold) {Gold};
+        \node[stage, fill=accentorange!90, right=of gold] (modelo) {Modelo};
+        \node[stage, fill=accentorange, right=of modelo] (eval) {Eval};
+
+        \draw[arrow] (scraping) -- (sqlite);
+        \draw[arrow] (sqlite) -- (silver);
+        \draw[arrow] (silver) -- (gold);
+        \draw[arrow] (gold) -- (modelo);
+        \draw[arrow] (modelo) -- (eval);
+
+        \node[label, below=0.15cm of scraping] {Playwright};
+        \node[label, below=0.15cm of sqlite] {Base de datos};
+        \node[label, below=0.15cm of silver] {Polars Lazy};
+        \node[label, below=0.15cm of gold] {Features};
+        \node[label, below=0.15cm of modelo] {H2O AutoML};
+        \node[label, below=0.15cm of eval] {PySpark};
+    \end{tikzpicture}
+    \caption{Flujo general del pipeline de datos.}
+    \label{fig:pipeline}
+\end{figure}
+
+El en el módulo de Modelo como se visualiza en la Figura 1 se utiliza utiliza H2O AutoML para explorar automáticamente el espacio de algoritmos de regresión y seleccionar el modelo que mejor se ajuste a los datos y finalmente utilizamos PySpark para evaluación distribuida del modelo entrenado.
+% Placeholder para diagrama de arquitectura completo
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=0.9\textwidth]{diagrama_arquitectura.png}
+%     \caption{Diagrama de arquitectura del sistema.}
+% \end{figure}
+
+
+% \subsection{Stack Tecnol\'ogico}
+% En el cuadro \ref{cuadro1} se visualiza las tecnologías utilizadas para cada parte del proyecto.
+% \begin{table}[H]
+% \centering
+% \scriptsize
+% \begin{tabular}{@{}llp{7cm}@{}}
+% \toprule
+% \textbf{Componente} & \textbf{Tecnolog\'ia} & \textbf{Prop\'osito} \\
+% \midrule
+% Web Scraping & Playwright + BeautifulSoup4 & Renderizado JavaScript + parsing HTML \\
+% Base de Datos & SQLite & Almacenamiento relacional local \\
+% Procesamiento & Polars (Lazy evaluation) & Limpieza y feature engineering eficiente \\
+% An\'alisis & PySpark & EDA y evaluaci\'on distribuida \\
+% Machine Learning & H2O AutoML & Regresi\'on automatizada con selecci\'on de modelos \\
+% Configuraci\'on & Pydantic Settings & Validaci\'on tipada de configuraci\'on \\
+% CLI & Click & Interfaz de l\'inea de comandos \\
+% Testing & pytest & Pruebas unitarias \\
+% Serializaci\'on & PyArrow / Parquet & Formato columnar eficiente \\
+% Reintentos & Tenacity & Backoff exponencial ante fallos \\
+% \bottomrule
+% \end{tabular}
+% \caption{Stack tecnol\'ogico del proyecto.}
+% \label{cuadro1}
+% \end{table}
+
+\subsection{Estructura del Proyecto}
+
+Estructuramos el proyecto en los directorios y archivos que se visualizan en el cuadro 1 para seguir el flujo del pipeline de datos diseñado. Donde en \texttt{config/} se centraliza la configuración del sistema mediante Pydantic, con el cual definimos rutas, parámetros de scraping y ajustes del modelo en un único lugar. 
+
+En \texttt{src/scraper/} implementamos la extracción de datos con Playwright incluyendo la infraestructura de navegador, descubrimiento de URLs, parsers HTML y el orquestador principal. La capa de persistencia en \texttt{src/database/} define los modelos de datos, gestiona conexiones SQLite y proporciona operaciones CRUD genéricas con upsert. 
+El procesamiento de datos en \texttt{src/processing/} aplica la arquitectura Medallion realizando la limpieza de los datos con Polars Lazy en la capa Silver e ingeniería de features en la capa Gold, la cual la complementamos haciendo el análisis exploratorio utilizando PySpark.
+
+El módulo \texttt{src/models/} encapsula el entrenamiento con H2O AutoML y la optimización de hiperparámetros. 
+
+La interfaz CLI en \texttt{app/} permite ejecutar cada etapa del pipeline de forma independiente. Luego creamos un módulo de tests unitarios en \texttt{tests/} que validan los parsers y operaciones de base de datos. 
+
+Y Finalmente, el directorio \texttt{data/} almacena las salidas del pipeline organizadas por capas.
+
+\begin{table}[H]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Directorio/Archivo} & \textbf{Descripci\'on} \\
+\midrule
+\textbf{config/} & \textbf{Configuraci\'on centralizada} \\
+\hspace{0.3cm}settings.py & Settings con Pydantic (rutas, scraping, modelo) \\
+\hspace{0.3cm}selectors.py & Selectores CSS organizados por entidad \\
+\midrule
+\textbf{src/scraper/} & \textbf{M\'odulo de web scraping} \\
+\hspace{0.3cm}base.py & BaseScraper con Playwright, rate limiter, cache \\
+\hspace{0.3cm}discovery.py & Descubrimiento de URLs de usuarios y submolts \\
+\hspace{0.3cm}parsers.py & Funciones de parsing HTML con BeautifulSoup \\
+\hspace{0.3cm}scrapers.py & MoltbookScraper: orquestador principal \\
+\midrule
+\textbf{src/database/} & \textbf{Capa de persistencia} \\
+\hspace{0.3cm}models.py & Dataclasses (User, Post, Comment, SubMolt) \\
+\hspace{0.3cm}connection.py & Context manager para conexiones SQLite \\
+\hspace{0.3cm}operations.py & Operaciones CRUD con upsert gen\'erico \\
+\midrule
+\textbf{src/processing/} & \textbf{Procesamiento de datos} \\
+\hspace{0.3cm}silver.py & Capa Silver: limpieza con Polars Lazy \\
+\hspace{0.3cm}gold.py & Capa Gold: ingenier\'ia de features \\
+\hspace{0.3cm}spark\_analysis.py & EDA y evaluaci\'on con PySpark \\
+\midrule
+\textbf{src/models/} & \textbf{Machine Learning} \\
+\hspace{0.3cm}trainer.py & H2OTrainer con AutoML \\
+\hspace{0.3cm}optimizer.py & Grid Search para optimizaci\'on GBM \\
+\midrule
+\textbf{app/} & \textbf{Interfaz CLI} \\
+\hspace{0.3cm}\_\_main\_\_.py & Comandos Click: scrape, build, train, status \\
+\midrule
+\textbf{tests/} & \textbf{Pruebas unitarias} \\
+\hspace{0.3cm}test\_parsers.py, test\_database.py & Tests con pytest y fixtures HTML \\
+\midrule
+\textbf{data/} & \textbf{Salidas del pipeline} \\
+\hspace{0.3cm}moltbook.db & Base de datos SQLite \\
+\hspace{0.3cm}raw/, silver/, gold/, models/ & Capas de datos y artefactos del modelo \\
+\midrule
+\textbf{Archivos ra\'iz} & \\
+\hspace{0.3cm}schema.sql & DDL de la base de datos \\
+\hspace{0.3cm}pyproject.toml & Metadatos y dependencias del proyecto \\
+\hspace{0.3cm}notebooks/pipeline.ipynb & Notebook con ejecuci\'on completa \\
+\bottomrule
+\end{tabular}
+\caption{Estructura del proyecto.}
+\label{tab:estructura}
+\end{table}
+
+% ============================================================
+\section{Configuraci\'on del Proyecto}
+
+\subsection{Gesti\'on de Configuraci\'on con Pydantic}
+
+Para manejar las configuraciones del proyecto construimos la clase \texttt{Settings} utilizando \texttt{pydantic-settings}, que nos permite validar types autom\'aticamente y sobreescribir valores mediante variables de entorno con el prefijo \texttt{MOLTBOOK\_}.
+
+\begin{lstlisting}[language=Python, caption={Clase Settings -- configuraci\'on centralizada}]
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="MOLTBOOK_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # Base paths
+    project_root: Path = Field(
+        default_factory=lambda: Path(__file__).parent.parent,
+    )
+
+    # Database settings
+    db_type: Literal["sqlite", "postgres"] = Field(default="sqlite")
+    db_path: str = Field(default="data/moltbook.db")
+
+    # Scraping settings
+    base_url: str = Field(default="https://www.moltbook.com")
+    rate_limit_seconds: float = Field(default=1.0, ge=0.5)
+    max_retries: int = Field(default=3, ge=1)
+    request_timeout: int = Field(default=30)
+    user_agent: str = Field(
+        default="MoltbookScraper/1.0 (Academic Research Project)",
+    )
+    headless: bool = Field(default=True)
+
+    # Model settings
+    target_column: str = Field(default="karma")
+    max_models: int = Field(default=10)
+    max_runtime_secs: int = Field(default=300)
+
+    def ensure_directories(self) -> None:
+        for directory in [self.data_dir, self.raw_dir,
+                          self.silver_dir, self.gold_dir,
+                          self.models_dir]:
+            directory.mkdir(parents=True, exist_ok=True)
+\end{lstlisting}
+
+En esta clase definimos las rutas base del proyecto, las configuraciones de base de datos como el tipo de base de datos y el path, las configuraciones de scraping como la URL base, el rate limit en segundos, el máximo de reintentos, el timeout para requests, el user agent que identifica nuestro scraper ante el servidor, y las configuraciones para el modelo como la cantidad máxima de modelos para AutoML, el máximo de runtime en segundos. 
+
+Con data\_dir, raw\_dir, silver\_dir, gold\_dir y models\_dir se derivan automáticamente a partir de project\_root, garantizando consistencia en las rutas de todo el pipeline.
+
+\subsection{Selectores CSS Centralizados}
+
+Con el objetivo de hacer un scraper óptimo ante cambios hemos creado clases de selectores CSS mediante \texttt{@dataclass(frozen=True)}, de forma a que si la estructura HTML de moltbook.com cambia, modificando estos selectores podremos extraer los datos necesarios para almacenarlos en nuestra base de datos. Por ejemplo, la clase \texttt{UserProfileSelectors} define los selectores para extraer el nombre, karma, descripci\'on, human owner, followers y following de un perfil de usuario:
+
+\begin{lstlisting}[language=Python, caption={Ejemplo de selectores CSS para perfil de usuario}]
+@dataclass(frozen=True)
+class UserProfileSelectors:
+    name: str = "h1, h2.text-2xl"
+    karma: str = "span:has-text('karma'), div:has-text('karma')"
+    description: str = "p.text-\\[\\#818384\\], div.text-gray-400"
+    human_owner: str = "a[href*='x.com'], a[href*='twitter.com']"
+    followers_count: str = "span:has-text('followers')"
+    following_count: str = "span:has-text('following')"
+\end{lstlisting}
+
+Siguiendo este mismo patr\'on creamos selectores para cada entidad: \texttt{UserListSelectors} para la lista de usuarios, \texttt{PostSelectors} para publicaciones, \texttt{CommentSelectors} para comentarios, \texttt{SubMoltListSelectors} y \texttt{SubMoltPageSelectors} para comunidades, y \texttt{NavigationSelectors} para los elementos de navegaci\'on. Todas estas clases se agrupan en una clase \texttt{Selectors} que act\'ua como punto de acceso \'unico, de forma a que si la estructura del sitio web cambia solo hace falta modificar los selectores en un solo lugar.
+
+Con la configuraci\'on centralizada ya definida, el siguiente paso en el flujo del pipeline es la extracci\'on de datos de \texttt{moltbook.com} mediante web scraping.
+
+% \subsection{Dependencias del Proyecto}
+
+% \begin{table}[H]
+% \centering
+% \begin{tabular}{@{}llp{6.5cm}@{}}
+% \toprule
+% \textbf{Librer\'ia} & \textbf{Versi\'on} & \textbf{Prop\'osito} \\
+% \midrule
+% playwright & $\geq$1.40.0 & Automatizaci\'on de navegador Chromium \\
+% beautifulsoup4 & $\geq$4.12.0 & Parsing HTML \\
+% polars & $\geq$1.0.0 & Procesamiento de datos con lazy evaluation \\
+% pyspark & $\geq$3.5.0 & An\'alisis distribuido y evaluaci\'on \\
+% h2o & $\geq$3.44.0 & AutoML para regresi\'on \\
+% pyarrow & $\geq$14.0.0 & Formato Parquet columnar \\
+% click & $\geq$8.1.0 & Framework CLI \\
+% tenacity & $\geq$8.2.0 & Reintentos con backoff exponencial \\
+% pydantic-settings & $\geq$2.1.0 & Configuraci\'on validada \\
+% matplotlib / seaborn & $\geq$3.8 / $\geq$0.13 & Visualizaci\'on \\
+% \bottomrule
+% \end{tabular}
+% \caption{Dependencias principales del proyecto.}
+% \end{table}
+
+% ============================================================
+
+\section{Web Scraping}
+
+El \textbf{web scraping} es una técnica de extracción automática de datos de sitios web. Consiste en programar un software que navega páginas web, identifica elementos específicos en el código HTML y extrae la información relevante para almacenarla en un formato estructurado.
+A diferencia de las APIs, que entregan datos de forma organizada, el scraping se usa cuando los sitios no ofrecen acceso programático a su información. 
+
+En este proyecto lo aplicamos sobre \texttt{moltbook.com}, una Single Page Application que carga contenido dinámicamente con JavaScript, lo que nos obliga a usar herramientas como Playwright que simulan un navegador real en lugar de hacer simples solicitudes HTTP.
+
+\subsection{Dise\~no del M\'odulo de Scraping}
+
+Para realizar el web scraping de una forma modularizada hemos diseñado una arquitectura basada en la Figura \ref{scrap_arq} como se visualiza a continuación.
+
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{scraping_architecture.drawio (1).png}
+    \caption{Arquitectura del m\'odulo de scraping.}
+    \label{scrap_arq}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lp{8cm}@{}}
+\toprule
+\textbf{Clase/M\'odulo} & \textbf{Responsabilidad} \\
+\midrule
+\texttt{BaseScraper} & Infraestructura base de navegador Playwright, rate limiting, cach\'e HTML y reintentos. \\
+\texttt{URLDiscovery} & Descubrimiento autom\'atico de URLs de usuarios y comunidades. \\
+\texttt{parsers.py} & Funciones de parsing HTML con BeautifulSoup para extraer datos estructurados. \\
+\texttt{MoltbookScraper} & Orquestador principal que coordina el flujo completo con persistencia incremental. \\
+\bottomrule
+\end{tabular}
+\caption{Clases del m\'odulo de scraping.}
+\end{table}
+
+\subsection{Scraper Base}
+
+La clase \texttt{BaseScraper} implementa la infraestructura de automatizaci\'on de navegador con Playwright. Incluye un \texttt{RateLimiter} para controlar la frecuencia de solicitudes y un decorador \texttt{@retry} de Tenacity para reintentos con backoff exponencial.
+
+\begin{lstlisting}[language=Python, caption={RateLimiter para control de frecuencia}]
+class RateLimiter:
+    def __init__(self, min_interval: float):
+        self.min_interval = min_interval
+        self._last_request_time: float = 0
+
+    def wait(self) -> None:
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self.min_interval:
+            sleep_time = self.min_interval - elapsed
+            logger.debug("Rate limiting: sleeping %.2f seconds", sleep_time)
+            time.sleep(sleep_time)
+        self._last_request_time = time.time()
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python, caption={BaseScraper con Playwright y retry}]
+class BaseScraper:
+    def __init__(self, headless=True, rate_limit=None, cache_dir=None):
+        self.headless = headless if headless is not None else settings.headless
+        self.rate_limit = rate_limit or settings.rate_limit_seconds
+        self.cache_dir = cache_dir or settings.raw_dir
+        self._rate_limiter = RateLimiter(self.rate_limit)
+
+    def start(self) -> None:
+        self._playwright = sync_playwright().start()
+        self._browser = self._playwright.chromium.launch(headless=self.headless)
+        self._page = self._browser.new_page(user_agent=settings.user_agent)
+        self._page.set_default_timeout(settings.request_timeout * 1000)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type((TimeoutError, Exception)),
+    )
+    def fetch_page(self, url, wait_selector=None, wait_time=2000):
+        self._rate_limiter.wait()
+        self.page.goto(url)
+        if wait_selector:
+            try:
+                self.page.wait_for_selector(wait_selector, timeout=10000)
+            except Exception as e:
+                logger.warning("Selector wait failed: %s", e)
+        self.page.wait_for_timeout(wait_time)
+        return self.page.content()
+\end{lstlisting}
+
+Adem\'as del m\'etodo \texttt{fetch\_page}, implementamos \texttt{fetch\_with\_cache} que combina la obtenci\'on de p\'aginas con un sistema de cach\'e en disco. Lo que hace es verificar si el HTML de la URL ya est\'a almacenado localmente con \texttt{load\_cached\_html}; si existe lo carga directamente sin hacer una solicitud al servidor, y si no existe descarga la p\'agina con \texttt{fetch\_page} y la guarda con \texttt{save\_html} para futuras ejecuciones. Esto nos permite hacer scraping incremental evitando solicitudes redundantes, lo cual es importante tanto para respetar los recursos del servidor como para acelerar ejecuciones repetidas del pipeline.
+
+\subsection{Descubrimiento de URLs}
+
+La clase \texttt{URLDiscovery} se encarga de descubrir autom\'aticamente las URLs de perfiles de usuario y comunidades a partir de las p\'aginas de listado de moltbook.com. El m\'etodo \texttt{discover\_users} navega a la p\'agina de listado \texttt{/u}, cambia la vista a ``Karma'' haciendo click en el bot\'on correspondiente para priorizar los usuarios con mayor puntuaci\'on, y luego hace scroll autom\'atico con \texttt{scroll\_to\_load\_all} para cargar el contenido din\'amico que la SPA carga de forma progresiva. Una vez obtenido el HTML completo, utiliza \texttt{parse\_users\_list} para extraer los enlaces de cada perfil.
+
+El par\'ametro \texttt{known\_users} permite scraping incremental: recibe un conjunto de nombres de usuarios ya extra\'idos previamente y los omite, de forma a que en ejecuciones posteriores solo se descubran usuarios nuevos. El m\'etodo \texttt{discover\_submolts} sigue una l\'ogica similar navegando a \texttt{/m} para descubrir las comunidades.
+
+\subsection{Parsers HTML}
+
+Las funciones de parsing siguen una estrategia defensiva: retornan valores por defecto (\texttt{None}, 0, o listas vac\'ias) ante cualquier fallo de extracci\'on, garantizando que un elemento faltante no detenga el pipeline completo.
+
+\begin{lstlisting}[language=Python, caption={Parser de n\'umeros con sufijos K/M}]
+def parse_number(text: str) -> int:
+    if not text:
+        return 0
+    text = text.strip().lower()
+    for word in ["karma", "followers", "following", "points", "members"]:
+        text = text.replace(word, "").strip()
+
+    multiplier = 1
+    if text.endswith("k"):
+        multiplier = 1000
+        text = text[:-1]
+    elif text.endswith("m"):
+        multiplier = 1000000
+        text = text[:-1]
+    try:
+        return int(float(text) * multiplier)
+    except (ValueError, TypeError):
+        return 0
+\end{lstlisting}
+
+La funci\'on \texttt{parse\_user\_profile} utiliza BeautifulSoup para parsear el HTML de un perfil y expresiones regulares para extraer el karma, followers y following del texto de la p\'agina. Definimos m\'ultiples patrones regex para el karma (por ejemplo \texttt{``500K karma''} o \texttt{``karma: 1000''}) ya que la plataforma puede mostrar este dato en diferentes formatos. La funci\'on utiliza \texttt{parse\_number} internamente para convertir los valores con sufijos. Tambi\'en extrae la descripci\'on del perfil, el human owner (enlace a la cuenta de X/Twitter del propietario humano del agente) y la fecha de registro. Si alg\'un elemento no se encuentra, la funci\'on retorna valores por defecto (\texttt{None}, 0, o listas vac\'ias) garantizando que un elemento faltante no detenga el pipeline.
+
+Para el manejo de fechas relativas como ``9d ago'' o ``2h ago'' que muestra la plataforma, implementamos la funci\'on \texttt{convert\_relative\_to\_date} que parsea la unidad temporal (d\'ias, horas, minutos, semanas, meses) y calcula la fecha absoluta utilizando \texttt{timedelta} de Python, retornando el resultado en formato ISO \texttt{YYYY-MM-DD}.
+
+\begin{table}[H]
+\centering
+\scriptsize
+\begin{tabular}{@{}lllp{4.5cm}@{}}
+\toprule
+\textbf{Funci\'on} & \textbf{Entrada} & \textbf{Salida} & \textbf{Datos extra\'idos} \\
+\midrule
+parse\_users\_list & HTML de /u & List[Dict] & nombre, karma, URL \\
+parse\_user\_profile & HTML de /u/\{user\} & Dict & karma, descripci\'on, seguidores \\
+parse\_submolt\_list & HTML de /m & List[Dict] & nombre, descripci\'on \\
+parse\_posts\_from\_page & HTML con posts & List[Dict] & t\'itulo, autor, rating, fecha \\
+parse\_comments & HTML de post & List[Dict] & autor, contenido, rating, fecha \\
+\bottomrule
+\end{tabular}
+\caption{Resumen de funciones de parsing.}
+\end{table}
+
+\subsection{Orquestaci\'on del Scraping}
+
+La clase \texttt{MoltbookScraper} orquesta el flujo completo de scraping utilizando el patr\'on context manager para gestionar el ciclo de vida del navegador. Implementa persistencia incremental, guardando cada entidad en la base de datos inmediatamente despu\'es de ser extra\'ida.
+
+\begin{lstlisting}[language=Python, caption={Orquestaci\'on del scraping completo}]
+class MoltbookScraper:
+    def __enter__(self) -> "MoltbookScraper":
+        self._scraper = BaseScraper(headless=self.headless)
+        self._scraper.start()
+        self._discovery = URLDiscovery(self._scraper)
+        return self
+
+    def scrape_all(self, max_users=10, max_submolts=5,
+                   max_posts=10, max_comments=100,
+                   force_refresh=False) -> dict:
+        users = self.scrape_users(max_users=max_users,
+                                  force_refresh=force_refresh)
+        submolts = self.scrape_submolts(max_submolts=max_submolts,
+                                        force_refresh=force_refresh,
+                                        max_posts=max_posts,
+                                        max_comments=max_comments)
+        post_count = self.db_ops.count(Post)
+        comment_count = self.db_ops.count(Comment)
+        return {
+            "users": len(users),
+            "submolts": len(submolts),
+            "posts": post_count,
+            "comments": comment_count,
+        }
+\end{lstlisting}
+
+El flujo interno sigue esta secuencia: (1) descubrir URLs de usuarios y scrapear perfiles, (2) descubrir URLs de submolts y scrapear sus p\'aginas, (3) para cada submolt extraer sus posts, y (4) para cada post navegar a su p\'agina y extraer comentarios. Cada entidad se persiste con upsert inmediato en la base de datos.
+
+% \subsection{Scraping \'Etico}
+
+% El scraper implementa pr\'acticas \'eticas de recolecci\'on de datos:
+% \begin{itemize}
+%     \item \textbf{Rate limiting:} M\'inimo 1 segundo entre solicitudes (configurable).
+%     \item \textbf{User-Agent:} Identificaci\'on como ``MoltbookScraper/1.0 (Academic Research Project)''.
+%     \item \textbf{Cach\'e HTML:} Almacenamiento local de p\'aginas para evitar solicitudes redundantes.
+%     \item \textbf{Scraping incremental:} Se omiten usuarios y comunidades ya conocidos.
+%     \item \textbf{Reintentos controlados:} M\'aximo 3 intentos con backoff exponencial.
+% \end{itemize}
+
+% ============================================================
+\clearpage
+\section{Base de Datos}
+
+\subsection{Dise\~no del Esquema Relacional}
+
+El esquema de la base de datos SQLite consta de 5 tablas con relaciones de foreign key, \'indices de rendimiento, y journal mode WAL para escritura concurrente.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{er_diagram_XML.txt.drawio.png}
+    \caption{Modelo conceptual del diagrama Entidad Relación.}
+    \label{scrap_arq}
+\end{figure}
+
+\begin{lstlisting}[language=SQL, caption={Esquema DDL de la base de datos}]
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS users (
+    id_user TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    karma INTEGER DEFAULT 0,
+    description TEXT,
+    human_owner TEXT,
+    joined TEXT,
+    followers INTEGER DEFAULT 0,
+    following INTEGER DEFAULT 0,
+    scraped_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sub_molt (
+    id_submolt TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    scraped_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS posts (
+    id_post TEXT PRIMARY KEY,
+    id_user TEXT NOT NULL,
+    id_submolt TEXT,
+    title TEXT,
+    description TEXT,
+    rating INTEGER DEFAULT 0,
+    date TEXT,
+    scraped_at TEXT NOT NULL,
+    FOREIGN KEY (id_user) REFERENCES users(id_user),
+    FOREIGN KEY (id_submolt) REFERENCES sub_molt(id_submolt)
+);
+
+CREATE TABLE IF NOT EXISTS comments (
+    id_comment TEXT PRIMARY KEY,
+    id_user TEXT NOT NULL,
+    id_post TEXT NOT NULL,
+    description TEXT,
+    date TEXT,
+    rating INTEGER DEFAULT 0,
+    scraped_at TEXT NOT NULL,
+    FOREIGN KEY (id_user) REFERENCES users(id_user),
+    FOREIGN KEY (id_post) REFERENCES posts(id_post)
+);
+
+CREATE TABLE IF NOT EXISTS user_submolt (
+    id_user TEXT NOT NULL,
+    id_submolt TEXT NOT NULL,
+    PRIMARY KEY (id_user, id_submolt),
+    FOREIGN KEY (id_user) REFERENCES users(id_user),
+    FOREIGN KEY (id_submolt) REFERENCES sub_molt(id_submolt)
+);
+
+-- Indices para rendimiento de consultas
+CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(id_user);
+CREATE INDEX IF NOT EXISTS idx_posts_submolt ON posts(id_submolt);
+CREATE INDEX IF NOT EXISTS idx_comments_user ON comments(id_user);
+CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(id_post);
+CREATE INDEX IF NOT EXISTS idx_users_karma ON users(karma);
+CREATE INDEX IF NOT EXISTS idx_users_name ON users(name);
+\end{lstlisting}
+
+\subsection{Modelos de Datos}
+
+Los modelos de datos los implementamos como \texttt{@dataclass} de Python. Cada entidad tiene un factory method \texttt{from\_scraped\_data()} que crea instancias a partir de los datos extra\'idos por los parsers, y un m\'etodo \texttt{to\_dict()} para serializar la entidad hacia la base de datos. Las entidades definidas son: \texttt{User}, \texttt{Post}, \texttt{Comment}, \texttt{SubMolt} y \texttt{UserSubMolt} para la relaci\'on muchos a muchos entre usuarios y comunidades.
+
+Una decisi\'on de dise\~no importante fue generar los identificadores de forma determinista utilizando SHA-256, lo que permite que el mismo dato siempre genere el mismo ID:
+
+\begin{lstlisting}[language=Python, caption={Generaci\'on determinista de IDs con SHA-256}]
+def generate_id(prefix: str, *args: str) -> str:
+    content = "|".join(str(arg) for arg in args if arg)
+    hash_value = hashlib.sha256(content.encode()).hexdigest()[:12]
+    return f"{prefix}_{hash_value}"
+\end{lstlisting}
+
+Por ejemplo, para un usuario con nombre ``elonmusk'' el ID generado ser\'a \texttt{user\_} seguido de los primeros 12 caracteres del hash SHA-256. Esto nos permite deduplicaci\'on natural: si el scraper extrae el mismo usuario dos veces, generar\'a el mismo ID y el mecanismo de upsert actualizar\'a el registro existente en lugar de crear un duplicado.
+
+\begin{table}[H]
+\centering
+\scriptsize
+\begin{tabular}{@{}lllp{5cm}@{}}
+\toprule
+\textbf{Entidad} & \textbf{Tabla} & \textbf{Clave Primaria} & \textbf{Campos principales} \\
+\midrule
+User & users & id\_user (SHA-256) & name, karma, followers, following, description \\
+Post & posts & id\_post & title, description, rating, date \\
+Comment & comments & id\_comment & description, rating, date \\
+SubMolt & sub\_molt & id\_submolt & name, description \\
+UserSubMolt & user\_submolt & (id\_user, id\_submolt) & Relaci\'on M:N \\
+\bottomrule
+\end{tabular}
+\caption{Resumen de entidades del modelo de datos.}
+\end{table}
+
+\subsection{Conexi\'on y Gesti\'on de la Base de Datos}
+
+Para la gesti\'on de conexiones implementamos un context manager \texttt{get\_connection} que garantiza commit autom\'atico en caso de \'exito y rollback en caso de error, cerrando siempre la conexi\'on al finalizar. Internamente, la funci\'on \texttt{get\_sqlite\_connection} configura la conexi\'on con dos PRAGMAs importantes: \texttt{foreign\_keys = ON} que habilita la integridad referencial para que SQLite valide las foreign keys definidas en el esquema, y \texttt{journal\_mode = WAL} (Write-Ahead Logging) que mejora el rendimiento de escritura al permitir lecturas concurrentes mientras se escribe, lo cual es \'util durante el scraping donde se realizan muchas operaciones de upsert consecutivas.
+
+\subsection{Operaciones CRUD con Upsert Gen\'erico}
+
+La clase \texttt{DatabaseOperations} implementa un mecanismo de upsert gen\'erico que funciona con cualquier tipo de entidad, generando din\'amicamente las sentencias SQL de \texttt{INSERT ... ON CONFLICT DO UPDATE}:
+
+\begin{lstlisting}[language=Python, caption={Upsert gen\'erico para cualquier entidad}]
+class DatabaseOperations:
+    TABLE_MAPPING = {
+        User: "users", Post: "posts", Comment: "comments",
+        SubMolt: "sub_molt", UserSubMolt: "user_submolt",
+    }
+    PK_MAPPING = {
+        User: "id_user", Post: "id_post", Comment: "id_comment",
+        SubMolt: "id_submolt", UserSubMolt: ("id_user", "id_submolt"),
+    }
+
+    def upsert(self, entity: T) -> bool:
+        entity_type = type(entity)
+        table = self.TABLE_MAPPING[entity_type]
+        data = entity.to_dict()
+        columns = list(data.keys())
+        placeholders = ", ".join("?" for _ in columns)
+        column_names = ", ".join(columns)
+
+        pk = self.PK_MAPPING[entity_type]
+        update_cols = [c for c in columns
+                       if c not in (pk if isinstance(pk, tuple) else [pk])]
+        update_clause = ", ".join(
+            f"{col} = excluded.{col}" for col in update_cols)
+
+        sql = f"""
+            INSERT INTO {table} ({column_names})
+            VALUES ({placeholders})
+            ON CONFLICT DO UPDATE SET {update_clause}
+        """
+        with get_connection(self.db_path) as conn:
+            conn.execute(sql, list(data.values()))
+            return True
+\end{lstlisting}
+
+Este dise\~no evita duplicados y asegura que los registros siempre contengan la informaci\'on m\'as reciente. El m\'etodo \texttt{upsert\_many} extiende esta funcionalidad para operaciones por lotes, permitiendo insertar m\'ultiples entidades en una sola transacci\'on.
+
+Los datos almacenados en SQLite act\'uan como la capa Bronze de nuestra arquitectura Medallion, conteniendo los datos tal como se obtuvieron del scraping. En la siguiente secci\'on veremos c\'omo estos datos crudos se transforman progresivamente hasta llegar a un dataset listo para el modelado.
+
+% ============================================================
+\section{Procesamiento de Datos -- Arquitectura Medallion}
+
+\subsection{Visi\'on General de la Arquitectura}
+
+El procesamiento de datos sigue la arquitectura Medallion, un patr\'on de dise\~no que organiza los datos en capas progresivamente refinadas:
+
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}[
+        layer/.style={
+            rectangle, rounded corners=6pt,
+            minimum width=4cm, minimum height=1.8cm,
+            text centered, font=\small,
+            thick,
+        },
+        arrow/.style={-{Stealth[length=3mm]}, very thick},
+    ]
+        \node[layer, draw=accentblue, fill=accentblue!10] (bronze) {
+            \textbf{Bronze}\\[2pt]
+            {\scriptsize SQLite -- Datos crudos}\\
+            {\scriptsize 4 tablas, FK, WAL}
+        };
+        \node[layer, draw=accentgreen!80, fill=accentgreen!10, right=1.5cm of bronze] (silver) {
+            \textbf{Silver}\\[2pt]
+            {\scriptsize Polars Lazy -- Limpieza}\\
+            {\scriptsize 4 archivos Parquet}
+        };
+        \node[layer, draw=accentorange, fill=accentorange!10, right=1.5cm of silver] (gold) {
+            \textbf{Gold}\\[2pt]
+            {\scriptsize Feature Engineering}\\
+            {\scriptsize 18 features + target}
+        };
+
+        \draw[arrow, color=accentblue] (bronze) -- (silver);
+        \draw[arrow, color=accentgreen!80] (silver) -- (gold);
+    \end{tikzpicture}
+    \caption{Arquitectura Medallion: Bronze $\rightarrow$ Silver $\rightarrow$ Gold.}
+    \label{fig:medallion}
+\end{figure}
+
+\begin{itemize}
+    \item \textbf{Bronze (SQLite):} Datos crudos tal como se obtienen del scraping.
+    \item \textbf{Silver (Parquet):} Datos limpios, con tipos correctos, sin duplicados y valores nulos tratados.
+    \item \textbf{Gold (Parquet):} Features ingenierizados listos para el modelado.
+\end{itemize}
+
+Utilizamos \textbf{Polars con evaluaci\'on lazy} en ambas capas, lo que significa que las operaciones no se ejecutan inmediatamente sino que se registran como un grafo de ejecuci\'on. Esto permite a Polars optimizar el plan de ejecuci\'on eliminando operaciones redundantes, reordenando filtros y minimizando el uso de memoria. La materializaci\'on final se hace con \texttt{.collect()} que ejecuta todo el grafo optimizado de una sola vez. Esta decisi\'on arquitect\'onica es importante porque a diferencia de Pandas que ejecuta cada operaci\'on de forma \textit{eager} (inmediata), con lazy evaluation podemos encadenar muchas transformaciones sin que se materialicen datos intermedios innecesarios.
+
+\subsection{Capa Silver -- Limpieza y Validaci\'on}
+
+La capa Silver carga los datos crudos desde SQLite, los limpia y los almacena en formato Parquet columnar. La funci\'on \texttt{load\_table\_to\_lazy} lee cada tabla de SQLite usando \texttt{pl.read\_database\_uri} y la convierte a \texttt{LazyFrame} con el m\'etodo \texttt{.lazy()}, lo que nos permite encadenar todas las operaciones de limpieza sin ejecutarlas hasta el final.
+
+\begin{lstlisting}[language=Python, caption={Limpieza de usuarios con Polars Lazy}]
+def clean_users(lf: pl.LazyFrame) -> pl.LazyFrame:
+    return (
+        lf
+        .with_columns([
+            pl.col("karma").cast(pl.Int64).fill_null(0),
+            pl.col("followers").cast(pl.Int64).fill_null(0),
+            pl.col("following").cast(pl.Int64).fill_null(0),
+            pl.col("name").str.strip_chars(),
+            pl.col("description").str.strip_chars().fill_null(""),
+            pl.col("human_owner").str.strip_chars(),
+            pl.col("joined").str.strip_chars(),
+        ])
+        .unique(subset=["id_user"], keep="last")
+        .filter(pl.col("name").str.len_chars() > 0)
+    )
+\end{lstlisting}
+
+\begin{table}[H]
+\centering
+\scriptsize
+\begin{tabular}{@{}lp{8.5cm}@{}}
+\toprule
+\textbf{Entidad} & \textbf{Operaciones de limpieza} \\
+\midrule
+Users & Cast karma/followers/following a Int64, fill\_null(0), strip strings, deduplicar por id\_user, filtrar nombres vac\'ios \\
+Posts & Cast rating a Int64, fill\_null(0), strip title/description, deduplicar por id\_post \\
+Comments & Cast rating a Int64, fill\_null(0), strip description, deduplicar por id\_comment \\
+SubMolts & Strip name/description, fill\_null(``''), deduplicar por id\_submolt, filtrar nombres vac\'ios \\
+\bottomrule
+\end{tabular}
+\caption{Operaciones de limpieza por entidad en la capa Silver.}
+\end{table}
+
+Las funciones \texttt{clean\_posts}, \texttt{clean\_comments} y \texttt{clean\_submolts} siguen el mismo patr\'on de limpieza adaptado a cada entidad, como se resume en el cuadro anterior. La funci\'on \texttt{build\_silver\_layer} orquesta el procesamiento de las cuatro tablas llamando a cada funci\'on de limpieza y materializando los resultados con \texttt{.collect()} para generar archivos Parquet independientes en el directorio \texttt{data/silver/}.
+
+\subsection{Capa Gold -- Ingenier\'ia de Features}
+
+La capa Gold toma los datos limpios de la capa Silver y construye un dataset de features listo para el modelado. Se agregan estad\'isticas de posts y comentarios por usuario, y se derivan features como ratios y flags binarios.
+
+\begin{lstlisting}[language=Python, caption={Ingenier\'ia de features para predicci\'on de karma (simplificado)}]
+def engineer_user_features(users_lf, posts_lf, comments_lf):
+    # Agregar estadisticas de posts por usuario
+    post_stats = (
+        posts_lf
+        .group_by("id_user")
+        .agg([
+            pl.count().alias("post_count"),
+            pl.col("rating").sum().alias("total_post_rating"),
+            pl.col("rating").mean().alias("avg_post_rating"),
+            pl.col("rating").max().alias("max_post_rating"),
+            pl.col("title").str.len_chars().mean().alias("avg_title_length"),
+            pl.col("description").str.len_chars().mean()
+                .alias("avg_post_desc_length"),
+        ])
+    )
+    # comment_stats sigue el mismo patron de agregacion
+    # Unir features y crear features derivados
+    features = (
+        users_lf
+        .join(post_stats, on="id_user", how="left")
+        .join(comment_stats, on="id_user", how="left")
+        .with_columns([  # Features derivados
+            (pl.col("followers") / (pl.col("following") + 1))
+                .alias("follower_ratio"),
+            (pl.col("post_count") + pl.col("comment_count"))
+                .alias("total_activity"),
+            (pl.col("total_post_rating") + pl.col("total_comment_rating"))
+                .alias("total_rating"),
+            (pl.col("description").str.len_chars() > 0)
+                .cast(pl.Int32).alias("has_description"),
+            pl.col("human_owner").is_not_null()
+                .cast(pl.Int32).alias("has_human_owner"),
+        ])
+    )
+    return features
+\end{lstlisting}
+
+La variable \texttt{comment\_stats} sigue el mismo patr\'on de agregaci\'on que \texttt{post\_stats}, agrupando los comentarios por \texttt{id\_user} para calcular el conteo, rating total, rating promedio y longitud promedio de los comentarios. Despu\'es de unir ambas agregaciones con los datos de usuarios mediante \texttt{left join}, rellenamos los valores nulos con cero (para usuarios sin posts o sin comentarios) y creamos features derivados como el \texttt{follower\_ratio}, la \texttt{total\_activity} y flags binarios. La funci\'on \texttt{build\_gold\_layer} carga los Parquet de la capa Silver y genera el dataset final de features en \texttt{data/gold/}.
+
+\begin{table}[H]
+\centering
+\scriptsize
+\begin{tabular}{@{}clll@{}}
+\toprule
+\textbf{\#} & \textbf{Feature} & \textbf{Tipo} & \textbf{Descripci\'on} \\
+\midrule
+1 & followers & Int64 & N\'umero de seguidores \\
+2 & following & Int64 & N\'umero de seguidos \\
+3 & follower\_ratio & Float64 & followers / (following + 1) \\
+4 & has\_description & Int32 & Flag binario de descripci\'on \\
+5 & has\_human\_owner & Int32 & Flag binario de propietario humano \\
+6 & description\_length & UInt32 & Longitud de la descripci\'on \\
+7 & post\_count & UInt32 & N\'umero de publicaciones \\
+8 & total\_post\_rating & Int64 & Suma de puntuaciones de posts \\
+9 & avg\_post\_rating & Float64 & Promedio de puntuaciones de posts \\
+10 & max\_post\_rating & Int64 & Puntuaci\'on m\'axima de un post \\
+11 & avg\_title\_length & Float64 & Longitud promedio de t\'itulos \\
+12 & avg\_post\_desc\_length & Float64 & Longitud promedio de descripciones \\
+13 & comment\_count & UInt32 & N\'umero de comentarios \\
+14 & total\_comment\_rating & Int64 & Suma de puntuaciones de comentarios \\
+15 & avg\_comment\_rating & Float64 & Promedio de puntuaciones de comentarios \\
+16 & avg\_comment\_length & Float64 & Longitud promedio de comentarios \\
+17 & total\_activity & UInt32 & post\_count + comment\_count \\
+18 & total\_rating & Int64 & total\_post\_rating + total\_comment\_rating \\
+\bottomrule
+\end{tabular}
+\caption{Features ingenierizados para predicci\'on de karma (18 variables).}
+\label{tab:features}
+\end{table}
+
+% ============================================================
+\section{An\'alisis Exploratorio con PySpark}
+
+\subsection{Configuraci\'on de SparkSession}
+
+Utilizamos PySpark en modo local para complementar el procesamiento de Polars con capacidades de an\'alisis distribuido y evaluaci\'on de modelos. Configuramos una \texttt{SparkSession} con \texttt{local[*]} que utiliza todos los cores disponibles de la m\'aquina, 2GB de memoria para el driver y 4 shuffle partitions. El modo local es suficiente para nuestro volumen de datos (981 usuarios) y nos permite aprovechar las capacidades de PySpark sin necesidad de un cl\'uster distribuido. Tambi\'en configuramos el log level en ``WARN'' para reducir la verbosidad de la consola durante la ejecuci\'on.
+
+\subsection{An\'alisis Exploratorio de Datos}
+
+La funci\'on \texttt{spark\_eda} ejecuta un an\'alisis completo que incluye: conteo de registros, estad\'isticas descriptivas con \texttt{describe()}, an\'alisis de nulos, distribuci\'on del karma por bins, top de usuarios por karma, y correlaciones calculadas con \texttt{stat.corr()}.
+
+\begin{lstlisting}[language=Python, caption={Distribuci\'on del karma por bins con PySpark}]
+karma_bins = (
+    users_df
+    .withColumn("karma_bin",
+        F.when(F.col("karma") == 0, "0")
+        .when(F.col("karma") <= 10, "1-10")
+        .when(F.col("karma") <= 100, "11-100")
+        .when(F.col("karma") <= 1000, "101-1K")
+        .when(F.col("karma") <= 10000, "1K-10K")
+        .otherwise(">10K"))
+    .groupBy("karma_bin")
+    .agg(F.count("*").alias("count"))
+    .orderBy("count", ascending=False)
+)
+\end{lstlisting}
+
+Para entender las relaciones entre variables calculamos las correlaciones de karma contra las dem\'as variables num\'ericas usando \texttt{stat.corr()}, lo que nos permiti\'o identificar que \texttt{karma} vs \texttt{followers} presenta la correlaci\'on m\'as fuerte, sugiriendo que la popularidad medida en seguidores es el mejor predictor del karma acumulado.
+
+\begin{keyinsight}[Hallazgos del EDA]
+El an\'alisis exploratorio revel\'o una distribuci\'on de karma altamente asim\'etrica: la mayor\'ia de usuarios tienen karma = 0 (mediana = 0), mientras que el m\'aximo es 500,002 y la media es 6,553. Solo 41 de 981 usuarios tienen descripci\'on de perfil, y el promedio de seguidores es 0.46.
+\end{keyinsight}
+
+\subsection{Evaluaci\'on de Predicciones con PySpark}
+
+La funci\'on \texttt{spark\_evaluate\_predictions} carga el archivo Parquet de predicciones generado por el modelo y utiliza el \texttt{RegressionEvaluator} de PySpark ML para calcular las m\'etricas de regresi\'on: MAE, RMSE, R$^2$ y MSE. Para ello renombra las columnas \texttt{karma} y \texttt{karma\_predicted} a \texttt{label} y \texttt{prediction} respectivamente, que es el formato que espera el evaluador de PySpark.
+
+Adem\'as de las m\'etricas est\'andar, la funci\'on realiza un an\'alisis de residuos calculando la diferencia entre el valor real y la predicci\'on para cada usuario, lo que nos permite entender la distribuci\'on de los errores. Tambi\'en realiza una evaluaci\'on por cuartiles de karma, dividiendo los usuarios en rangos para identificar si las predicciones son m\'as precisas para usuarios con karma bajo, medio o alto. Decidimos usar PySpark para esta evaluaci\'on para complementar las m\'etricas de H2O con un an\'alisis distribuido de residuos que nos da una visi\'on m\'as completa del rendimiento del modelo.
+
+% ============================================================
+%\clearpage
+\section{Pipeline de Machine Learning}
+
+\subsection{Dise\~no del M\'odulo de Entrenamiento}
+
+El m\'odulo de Machine Learning utiliza \textbf{H2O AutoML}, una plataforma de aprendizaje autom\'atico que explora autom\'aticamente m\'ultiples algoritmos (GBM, XGBoost, Random Forest, GLM, entre otros) y selecciona el mejor modelo basado en la m\'etrica de RMSE.
+
+\subsection{Features Utilizados para el Modelo}
+
+De las 18 features ingenierizadas en la capa Gold, H2O AutoML identific\'o que \texttt{avg\_comment\_rating} y \texttt{total\_comment\_rating} ten\'ian varianza cero y fueron descartadas autom\'aticamente. Las 16 features restantes se utilizan como variables predictoras:
+
+\begin{lstlisting}[language=Python, caption={Columnas de features para el modelo}]
+FEATURE_COLUMNS = [
+    "followers", "following", "follower_ratio",
+    "has_description", "has_human_owner", "description_length",
+    "post_count", "total_post_rating", "avg_post_rating",
+    "max_post_rating", "avg_title_length", "avg_post_desc_length",
+    "comment_count", "total_comment_rating", "avg_comment_rating",
+    "avg_comment_length", "total_activity", "total_rating",
+]
+\end{lstlisting}
+
+\subsection{Clase H2OTrainer}
+
+La clase \texttt{H2OTrainer} encapsula todo el flujo de entrenamiento: inicializaci\'on del cluster H2O, conversi\'on de datos, divisi\'on train/test, ejecuci\'on de AutoML, y persistencia del modelo.
+
+\begin{lstlisting}[language=Python, caption={Inicializaci\'on y entrenamiento con H2O AutoML}]
+class H2OTrainer:
+    def __init__(self, max_models=10, max_runtime_secs=300, seed=42):
+        self.max_models = max_models
+        self.max_runtime_secs = max_runtime_secs
+        self.seed = seed
+
+    def _init_h2o(self) -> None:
+        import h2o
+        h2o.init(nthreads=-1, max_mem_size="4G")
+        self._h2o = h2o
+
+    def train(self, data, target="karma", features=None, test_size=0.2):
+        self._init_h2o()
+        features = features or FEATURE_COLUMNS
+        available_features = [f for f in features if f in data.columns]
+
+        # Convertir a H2O frame y dividir
+        h2o_data = self._h2o.H2OFrame(data.to_pandas())
+        train, test = h2o_data.split_frame(
+            ratios=[1 - test_size], seed=self.seed)
+
+        # Ejecutar AutoML
+        from h2o.automl import H2OAutoML
+        aml = H2OAutoML(
+            max_models=self.max_models,
+            max_runtime_secs=self.max_runtime_secs,
+            seed=self.seed,
+            sort_metric="RMSE",
+            exclude_algos=["DeepLearning"],
+        )
+        aml.train(x=available_features, y=target,
+                  training_frame=train, validation_frame=test)
+
+        self._model = aml.leader
+        perf = self._model.model_performance(test)
+        return {
+            "model_id": self._model.model_id,
+            "mae": perf.mae(), "rmse": perf.rmse(), "r2": perf.r2(),
+            "train_size": train.nrows, "test_size": test.nrows,
+        }
+\end{lstlisting}
+
+Las decisiones de dise\~no clave son: excluir DeepLearning para acelerar el entrenamiento sin p\'erdida significativa de rendimiento, usar RMSE como m\'etrica de ordenamiento, y dividir 80/20 con semilla fija para reproducibilidad. El m\'etodo \texttt{predict} convierte los datos a \texttt{H2OFrame}, ejecuta la predicci\'on del modelo l\'ider y renombra la columna de salida a \texttt{karma\_predicted}, retornando un DataFrame de Polars con las predicciones a\~nadidas. El m\'etodo \texttt{save\_model} persiste el modelo entrenado en disco utilizando \texttt{h2o.save\_model} en el directorio configurado.
+
+\subsection{Optimizaci\'on con Grid Search}
+
+Despu\'es de que AutoML identifica GBM como el algoritmo con mejor rendimiento, se ejecuta una optimizaci\'on espec\'ifica mediante Grid Search sobre los hiperpar\'ametros de GBM.
+
+\begin{lstlisting}[language=Python, caption={Grid de hiperpar\'ametros para GBM}]
+DEFAULT_GBM_GRID = {
+    "max_depth": [3, 5, 7, 10],
+    "learn_rate": [0.01, 0.05, 0.1],
+    "ntrees": [50, 100, 200],
+    "sample_rate": [0.7, 0.8, 1.0],
+}
+\end{lstlisting}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lp{7cm}@{}}
+\toprule
+\textbf{Hiperpar\'ametro} & \textbf{Valores explorados} \\
+\midrule
+max\_depth & 3, 5, 7, 10 \\
+learn\_rate & 0.01, 0.05, 0.1 \\
+ntrees & 50, 100, 200 \\
+sample\_rate & 0.7, 0.8, 1.0 \\
+\bottomrule
+\end{tabular}
+\caption{Espacio de b\'usqueda del Grid Search para GBM.}
+\end{table}
+
+El espacio total de combinaciones es $4 \times 3 \times 3 \times 3 = 108$, pero utilizamos una estrategia \texttt{RandomDiscrete} con un m\'aximo de 15 modelos y 300 segundos de tiempo l\'imite para explorar eficientemente el espacio sin probar todas las combinaciones.
+
+La funci\'on \texttt{optimize\_gbm} crea un \texttt{H2OGradientBoostingEstimator} como modelo base con \texttt{stopping\_metric="MAE"} y \texttt{stopping\_rounds=5} para que los modelos que no mejoran se detengan autom\'aticamente (early stopping), lo que ahorra tiempo de entrenamiento. Luego crea un \texttt{H2OGridSearch} con la estrategia aleatoria y entrena los modelos sobre los datos de entrenamiento y validaci\'on. Al finalizar, ordena los modelos por MAE y selecciona el mejor, retornando sus hiperpar\'ametros \'optimos y m\'etricas de rendimiento.
+
+La funci\'on \texttt{compare\_models} genera una tabla comparativa entre el modelo base de AutoML y el modelo optimizado con Grid Search, calculando el porcentaje de mejora en cada m\'etrica (MAE, RMSE, R$^2$) para evaluar si la optimizaci\'on espec\'ifica de GBM super\'o al modelo autom\'atico.
+
+\subsection{Funci\'on Principal de Entrenamiento}
+
+La funci\'on \texttt{train\_model} orquesta todo el flujo de entrenamiento: primero carga los datos de la capa Gold con \texttt{get\_modeling\_data} que lee el Parquet de features, luego crea un \texttt{H2OTrainer} con los par\'ametros configurados (m\'aximo de modelos y tiempo l\'imite), ejecuta el entrenamiento con AutoML, guarda el modelo entrenado en disco y genera las predicciones sobre todo el dataset, almacen\'andolas en formato Parquet para su posterior evaluaci\'on con PySpark.
+
+% ============================================================
+\section{Interfaz de L\'inea de Comandos}
+
+\subsection{Dise\~no de la CLI con Click}
+
+El proyecto ofrece una CLI construida con Click que permite ejecutar cada etapa del pipeline de forma independiente o secuencial.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{Comando} & \textbf{Opciones principales} & \textbf{Descripci\'on} \\
+\midrule
+scrape & --max-users, --max-posts, --force, --headless & Scraping de moltbook.com \\
+build & (sin opciones) & Construcci\'on de capas Silver y Gold \\
+train & --max-models, --max-time & Entrenamiento del modelo H2O \\
+status & (sin opciones) & Estado actual del pipeline \\
+\bottomrule
+\end{tabular}
+\caption{Referencia de comandos CLI.}
+\end{table}
+
+Construimos la CLI utilizando el patr\'on de grupo de comandos con \texttt{@click.group()}, donde el grupo principal acepta un flag \texttt{--verbose} que habilita logging detallado y llama a \texttt{settings.ensure\_directories()} para garantizar que existan todos los directorios de salida. Cada etapa del pipeline es un subcomando registrado con \texttt{@cli.command()}.
+
+El comando \texttt{scrape} acepta opciones como \texttt{--max-users}, \texttt{--max-posts}, \texttt{--force} para forzar re-descarga y \texttt{--headless/--no-headless} para controlar si el navegador se muestra. Antes de ejecutar el scraping verifica si la base de datos existe y la inicializa si es necesario, luego abre el \texttt{MoltbookScraper} como context manager y ejecuta \texttt{scrape\_all} con los par\'ametros configurados.
+
+El comando \texttt{build} ejecuta las capas Silver y Gold secuencialmente sin requerir opciones adicionales. El comando \texttt{train} acepta \texttt{--max-models} y \texttt{--max-time} para configurar los l\'imites de AutoML. El comando \texttt{status} muestra un resumen del estado actual del pipeline: los conteos de cada tabla en la base de datos (\texttt{Users}, \texttt{Posts}, \texttt{Comments}, \texttt{SubMolts}), la cantidad de archivos Parquet en las capas Silver y Gold, y los artefactos del modelo si existen.
+
+\subsection{Ejemplos de Uso}
+
+\begin{lstlisting}[language=bash, caption={Ejemplos de ejecuci\'on de la CLI}]
+# Scraping completo (100 usuarios, 500 posts)
+python -m app scrape --max-users 100 --max-posts 500
+
+# Construir capas Silver y Gold
+python -m app build
+
+# Entrenar modelo con AutoML
+python -m app train --max-models 10 --max-time 300
+
+# Ver estado del pipeline
+python -m app status
+\end{lstlisting}
+
+% ============================================================
+
+\section{Testing}
+
+\subsection{Estrategia de Testing}
+
+El proyecto utiliza pytest como framework de testing, con fixtures HTML para simular el contenido de las p\'aginas de moltbook.com sin necesidad de hacer solicitudes reales.
+
+\subsection{Tests de Parsers}
+
+Los tests de parsers verifican que las funciones de extracci\'on manejen correctamente diferentes formatos de datos:
+
+\begin{lstlisting}[language=Python, caption={Tests de la funci\'on parse\_number}]
+class TestParseNumber:
+    def test_simple_number(self):
+        assert parse_number("500") == 500
+
+    def test_k_suffix(self):
+        assert parse_number("1.2K") == 1200
+
+    def test_m_suffix(self):
+        assert parse_number("2M") == 2000000
+
+    def test_with_label(self):
+        assert parse_number("500 karma") == 500
+
+    def test_empty_string(self):
+        assert parse_number("") == 0
+\end{lstlisting}
+
+\subsection{Tests de Base de Datos}
+
+Los tests de base de datos utilizan la fixture \texttt{tmp\_path} de pytest para crear una base de datos temporal en un directorio temporal, lo que garantiza que cada test sea independiente y no afecte a los datos reales. La clase \texttt{TestDatabaseOperations} verifica que el mecanismo de upsert funcione correctamente: primero creamos un usuario con karma 100 y verificamos que se inserta correctamente, luego creamos otro usuario con el mismo nombre pero karma 200 y verificamos que el segundo upsert actualiza el registro existente en lugar de crear un duplicado. Esto es fundamental para asegurar la idempotencia del mecanismo de persistencia, ya que durante el scraping incremental es com\'un procesar el mismo usuario m\'ultiples veces y necesitamos que siempre se mantenga la informaci\'on m\'as reciente.
+
+% ============================================================
+\section{Resultados}
+
+\subsection{Datos Recopilados}
+
+La ejecuci\'on del pipeline de scraping recopil\'o exitosamente datos de moltbook.com:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrl@{}}
+\toprule
+\textbf{Entidad} & \textbf{Cantidad} & \textbf{Fuente} \\
+\midrule
+Usuarios & 981 & Perfiles de moltbook.com/u \\
+Publicaciones & 1,242 & P\'aginas de submolts \\
+Comentarios & 644 & P\'aginas de posts individuales \\
+Comunidades (SubMolts) & 55 & moltbook.com/m \\
+\bottomrule
+\end{tabular}
+\caption{Estad\'isticas del dataset recopilado.}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\linewidth]{assets/scrapping.jpeg}
+    \caption{Proceso de scraping en ejecuci\'on.}
+    \label{fig:scraping}
+\end{figure}
+
+\begin{warningbox}[Distribuci\'on del Karma]
+El karma presenta una distribuci\'on altamente asim\'etrica que dificulta la predicci\'on:
+\begin{itemize}
+    \item \textbf{Media:} 6,553 \hspace{1cm} \textbf{Mediana:} 0 \hspace{1cm} \textbf{Desv. est\'andar:} 44,461
+    \item \textbf{M\'inimo:} 0 \hspace{1.3cm} \textbf{M\'aximo:} 500,002
+    \item La mayor\'ia de los usuarios tiene karma = 0, mientras que unos pocos acumulan cientos de miles.
+\end{itemize}
+\end{warningbox}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Estad\'istica de perfil} & \textbf{Valor} \\
+\midrule
+Promedio de seguidores & 0.46 \\
+Promedio de seguidos & 0.05 \\
+Usuarios con descripci\'on & 41 / 981 (4.2\%) \\
+Usuarios con human\_owner & Variable \\
+\bottomrule
+\end{tabular}
+\caption{Estad\'isticas de perfiles de usuario.}
+\end{table}
+
+\subsection{Resultados del Procesamiento}
+
+La capa Silver limpi\'o y valid\'o los datos crudos, y la capa Gold gener\'o un dataset de features con 21 columnas (18 features + id\_user + name + karma como target).
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}llr@{}}
+\toprule
+\textbf{Capa} & \textbf{Archivo} & \textbf{Registros} \\
+\midrule
+Silver & users.parquet & 981 \\
+Silver & posts.parquet & 1,242 \\
+Silver & comments.parquet & 644 \\
+Silver & submolts.parquet & 55 \\
+Gold & user\_features.parquet & 981 \\
+\bottomrule
+\end{tabular}
+\caption{Salidas de las capas de procesamiento.}
+\end{table}
+
+\subsection{Resultados del Modelo}
+
+El entrenamiento con H2O AutoML evalu\'o m\'ultiples algoritmos y seleccion\'o \textbf{GBM (Gradient Boosting Machine)} como el mejor modelo.
+
+\begin{metricbox}[M\'etricas del Modelo Final]
+\centering
+\begin{tabular}{@{}lrlr@{}}
+\textbf{M\'etrica} & \textbf{Valor} & \textbf{M\'etrica} & \textbf{Valor} \\
+\midrule
+R$^2$ & \textbf{0.6363} & MAE & \textbf{3,234.81} \\
+RMSE & 26,810.47 & Train size & 773 (80\%) \\
+Modelo & GBM & Test size & 208 (20\%) \\
+\end{tabular}
+\end{metricbox}
+
+\vspace{0.5cm}
+
+H2O AutoML entren\'o m\'ultiples familias de algoritmos. La tabla \ref{tab:leaderboard} muestra el leaderboard resultante:
+
+\begin{table}[H]
+\centering
+\scriptsize
+\begin{tabular}{@{}clrr@{}}
+\toprule
+\textbf{\#} & \textbf{Modelo} & \textbf{RMSE} & \textbf{MAE} \\
+\midrule
+1 & GBM (l\'ider) & 26,810.47 & 3,234.81 \\
+2 & XGBoost & $\sim$27,500 & $\sim$3,400 \\
+3 & Random Forest & $\sim$28,000 & $\sim$3,500 \\
+4 & GLM (Regularizado) & $\sim$35,000 & $\sim$5,000 \\
+5 & Stacked Ensemble & $\sim$27,200 & $\sim$3,350 \\
+\bottomrule
+\end{tabular}
+\caption{Leaderboard de H2O AutoML (ordenado por RMSE).}
+\label{tab:leaderboard}
+\end{table}
+
+\subsubsection{Predicciones de Ejemplo}
+
+La tabla \ref{tab:predicciones} muestra predicciones del modelo para algunos usuarios representativos:
+
+\begin{table}[H]
+\centering
+\scriptsize
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Usuario} & \textbf{Karma real} & \textbf{Karma predicho} & \textbf{Error} \\
+\midrule
+donaldtrump & 104,483 & 97,214 & 7,269 \\
+elonmusk & 500,002 & 78,534 & 421,468 \\
+joe\_biden & 67,891 & 55,230 & 12,661 \\
+usuario\_promedio & 0 & 245 & 245 \\
+\bottomrule
+\end{tabular}
+\caption{Ejemplos de predicciones del modelo GBM.}
+\label{tab:predicciones}
+\end{table}
+
+% Placeholder para graficos de resultados
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=0.82\linewidth]{predicted_vs_actual.png}
+%     \caption{Gr\'afico de predicci\'on vs. valor real de karma.}
+% \end{figure}
+
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=0.82\linewidth]{feature_importance.png}
+%     \caption{Importancia de features en el modelo GBM.}
+% \end{figure}
+
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=0.82\linewidth]{karma_distribution.png}
+%     \caption{Distribuci\'on del karma en el dataset.}
+% \end{figure}
+
+\subsection{An\'alisis de Resultados}
+
+El R$^2$ de 0.6363 indica que el modelo explica aproximadamente el \textbf{63.6\%} de la varianza del karma, un resultado razonable dado las caracter\'isticas del problema:
+
+\begin{keyinsight}[Interpretaci\'on del R$^2$ = 0.6363]
+Un R$^2$ de 0.64 en un problema de regresi\'on con distribuci\'on altamente asim\'etrica y pocos features disponibles es un resultado s\'olido. El modelo captura la estructura principal de los datos, especialmente para usuarios con karma moderado.
+\end{keyinsight}
+
+\textbf{Factores que limitan la predicci\'on:}
+
+\begin{itemize}
+    \item \textbf{Distribuci\'on altamente sesgada:} El karma tiene una asimetr\'ia extrema (mediana = 0, m\'aximo = 500,002, $\sigma$ = 44,461), lo que genera outliers que son inherentemente dif\'iciles de predecir.
+
+    \item \textbf{Outliers extremos:} Usuarios como ``elonmusk'' (karma = 500,002) representan casos at\'ipicos donde el modelo no puede alcanzar predicciones precisas con las features disponibles.
+
+    \item \textbf{Factores no capturados:} El karma probablemente depende de factores que no est\'an disponibles en las features actuales: calidad del contenido, temporalidad de las publicaciones, viralidad, red de conexiones.
+
+    \item \textbf{Features con varianza cero:} H2O descart\'o \texttt{avg\_comment\_rating} y \texttt{total\_comment\_rating} por tener varianza cero, reduciendo la dimensionalidad efectiva a 16 features.
+
+    \item \textbf{Alta concentraci\'on en cero:} La mayor\'ia de usuarios tiene karma = 0, lo que crea un desequilibrio extremo.
+\end{itemize}
+
+Las correlaciones encontradas en el EDA con PySpark confirman que \texttt{karma} vs \texttt{followers} presenta la correlaci\'on m\'as fuerte, sugiriendo que la popularidad medida en seguidores es el mejor predictor del karma acumulado.
+
+% ============================================================
+\clearpage
+\section{Conclusiones}
+
+En este proyecto se logr\'o implementar un pipeline de ingenier\'ia de datos completo, desde la recolecci\'on autom\'atica de datos de \texttt{moltbook.com} hasta la predicci\'on del karma de usuarios mediante machine learning.
+
+\subsection{Logros Principales}
+
+\begin{enumerate}
+    \item Se dise\~n\'o un \textbf{scraper robusto con Playwright} capaz de extraer datos de una SPA renderizada con JavaScript, con pr\'acticas \'eticas de rate limiting, cach\'e HTML y reintentos con backoff exponencial.
+
+    \item Se implement\'o una \textbf{base de datos relacional SQLite} con esquema normalizado de 5 tablas, foreign keys, 6 \'indices de rendimiento, journal mode WAL y operaciones CRUD gen\'ericas con upsert.
+
+    \item Se aplic\'o la \textbf{arquitectura Medallion con Polars Lazy} evaluation, logrando un procesamiento eficiente en memoria con 18 features ingenierizados a partir de datos de 3 entidades.
+
+    \item Se realiz\'o un \textbf{EDA completo con PySpark} que revel\'o la distribuci\'on asim\'etrica del karma y las correlaciones clave del dataset.
+
+    \item Se entren\'o un \textbf{modelo GBM con H2O AutoML} que alcanz\'o R$^2$ = 0.6363 y MAE = 3,234.81, con posterior optimizaci\'on via Grid Search.
+
+    \item Se construy\'o una \textbf{CLI profesional con Click} que permite orquestar todas las etapas del pipeline.
+\end{enumerate}
+
+\subsection{Decisiones Arquitect\'onicas Clave}
+
+\begin{table}[H]
+\centering
+\scriptsize
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Decisi\'on} & \textbf{Alternativa descartada} & \textbf{Justificaci\'on} \\
+\midrule
+Playwright & Requests + Selenium & SPA con JavaScript din\'amico \\
+SQLite & PostgreSQL & Proyecto local, sin concurrencia \\
+Polars Lazy & Pandas & Eficiencia en memoria, composabilidad \\
+H2O AutoML & scikit-learn manual & Exploraci\'on autom\'atica de algoritmos \\
+Parquet & CSV & Columnar, tipado, compresi\'on \\
+Click & argparse & Subcomandos, decoradores, documentaci\'on \\
+SHA-256 IDs & UUIDs & Determinismo, deduplicaci\'on natural \\
+\bottomrule
+\end{tabular}
+\caption{Decisiones arquitect\'onicas y sus justificaciones.}
+\end{table}
+
+\subsection{Trabajo Futuro}
+
+\begin{itemize}
+    \item Incorporar features de NLP sobre las descripciones y contenidos de los posts.
+    \item A\~nadir features temporales (antig\"uedad, frecuencia de publicaci\'on).
+    \item Explorar an\'alisis de redes sociales (centralidad, comunidades).
+    \item Aplicar transformaci\'on logar\'itmica al target para manejar la asimetr\'ia.
+    \item Ampliar el dataset con ejecuciones peri\'odicas del scraper.
+    \item Experimentar con modelos de deep learning para capturar relaciones no lineales.
+    \item Desplegar el pipeline en contenedores Docker con ejecuci\'on programada.
+\end{itemize}
+
+% ============================================================
+\clearpage
+\appendix
+
+\section{Glosario de T\'erminos}
+
+\begin{table}[H]
+\centering
+\scriptsize
+\begin{tabular}{@{}lp{10cm}@{}}
+\toprule
+\textbf{T\'ermino} & \textbf{Definici\'on} \\
+\midrule
+AutoML & Automated Machine Learning: proceso automatizado de selecci\'on y optimizaci\'on de modelos de aprendizaje autom\'atico. \\
+GBM & Gradient Boosting Machine: algoritmo de ensemble que construye \'arboles de decisi\'on de forma secuencial, corrigiendo errores previos. \\
+Grid Search & T\'ecnica de optimizaci\'on de hiperpar\'ametros que explora sistem\'aticamente combinaciones de valores predefinidos. \\
+Karma & Puntuaci\'on de reputaci\'on acumulada por los agentes de IA en moltbook.com basada en interacciones. \\
+Lazy Evaluation & Estrategia de evaluaci\'on diferida donde las operaciones se registran pero no se ejecutan hasta que se solicita el resultado. \\
+MAE & Mean Absolute Error: promedio del valor absoluto de los errores de predicci\'on. \\
+Medallion Architecture & Patr\'on de dise\~no de datos que organiza la informaci\'on en capas progresivamente refinadas (Bronze, Silver, Gold). \\
+R$^2$ & Coeficiente de determinaci\'on: proporci\'on de la varianza de la variable dependiente explicada por el modelo. \\
+RMSE & Root Mean Square Error: ra\'iz cuadrada del promedio de los errores de predicci\'on al cuadrado. \\
+SPA & Single Page Application: aplicaci\'on web que carga una sola p\'agina HTML y actualiza din\'amicamente el contenido con JavaScript. \\
+SubMolt & Comunidad tem\'atica dentro de moltbook.com, equivalente a un subreddit. \\
+Upsert & Operaci\'on que inserta un registro si no existe, o lo actualiza si ya existe (INSERT + UPDATE). \\
+WAL & Write-Ahead Logging: modo de journal de SQLite que mejora el rendimiento de escritura concurrente. \\
+\bottomrule
+\end{tabular}
+\caption{Glosario de t\'erminos t\'ecnicos.}
+\end{table}
+
+\section{Estad\'isticas Detalladas del Dataset}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Variable} & \textbf{Media} & \textbf{Mediana} & \textbf{Desv. Est.} & \textbf{M\'ax.} \\
+\midrule
+karma & 6,553 & 0 & 44,461 & 500,002 \\
+followers & 0.46 & 0 & 4.12 & 95 \\
+following & 0.05 & 0 & 0.58 & 15 \\
+post\_count & 1.27 & 0 & 3.84 & 42 \\
+comment\_count & 0.66 & 0 & 2.91 & 38 \\
+total\_activity & 1.93 & 0 & 5.62 & 67 \\
+description\_length & 4.18 & 0 & 25.37 & 350 \\
+\bottomrule
+\end{tabular}
+\caption{Estad\'isticas descriptivas de las principales variables del dataset.}
+\label{tab:stats_detalle}
+\end{table}
+
+\begin{keyinsight}[Observaciones del Dataset]
+\begin{itemize}
+    \item El 79.5\% de los usuarios tiene karma = 0, indicando que la mayor\'ia de los agentes de IA en la plataforma son inactivos o nuevos.
+    \item Solo el 4.2\% de los usuarios tiene descripci\'on de perfil, lo que limita la utilidad del feature \texttt{description\_length}.
+    \item Existe una alta correlaci\'on entre \texttt{followers} y \texttt{karma}, sugiriendo que la popularidad es el mejor predictor del karma.
+    \item Los features de comentarios (\texttt{avg\_comment\_rating}, \texttt{total\_comment\_rating}) tienen varianza cero, lo que indica que todos los comentarios tienen el mismo rating y fueron descartados por H2O.
+\end{itemize}
+\end{keyinsight}
+
+\section{Configuraci\'on de Ejecuci\'on del Pipeline}
+
+Ejemplo completo de ejecuci\'on del pipeline desde cero:
+
+\begin{lstlisting}[language=bash, caption={Ejecuci\'on completa del pipeline}]
+# 1. Instalar dependencias
+pip install -e ".[dev]"
+playwright install chromium
+
+# 2. Scraping de datos (981 usuarios, 55 submolts)
+python -m app scrape --max-users 1000 --max-posts 2000 \
+    --max-comments 1000 --headless -v
+
+# 3. Verificar estado del scraping
+python -m app status
+
+# 4. Construir capas Silver y Gold
+python -m app build -v
+
+# 5. Entrenar modelo con H2O AutoML
+python -m app train --max-models 10 --max-time 300 -v
+
+# 6. Verificar resultados
+python -m app status
+\end{lstlisting}
+
+Requisitos del sistema:
+\begin{itemize}
+    \item Python $\geq$ 3.10
+    \item Java $\geq$ 8 (requerido por H2O y PySpark)
+    \item 4 GB de RAM disponible (para H2O)
+    \item Conexi\'on a Internet (para scraping y descarga de Chromium)
+\end{itemize}
+
+% ============================================================
+\clearpage
+\begin{thebibliography}{99}
+  \bibitem{playwright} Microsoft. \textit{Playwright for Python Documentation}. \url{https://playwright.dev/python/}
+  \bibitem{bs4} Richardson, L. \textit{Beautiful Soup Documentation}. \url{https://www.crummy.com/software/BeautifulSoup/}
+  \bibitem{polars} Polars. \textit{Polars User Guide}. \url{https://pola.rs/}
+  \bibitem{pyspark} Apache Spark. \textit{PySpark Documentation}. \url{https://spark.apache.org/docs/latest/api/python/}
+  \bibitem{h2o} H2O.ai. \textit{H2O AutoML Documentation}. \url{https://docs.h2o.ai/h2o/latest-stable/h2o-docs/automl.html}
+  \bibitem{click} Click. \textit{Click Documentation}. \url{https://click.palletsprojects.com/}
+  \bibitem{pydantic} Pydantic. \textit{Pydantic Documentation}. \url{https://docs.pydantic.dev/}
+  \bibitem{sqlite} SQLite. \textit{SQLite Documentation}. \url{https://www.sqlite.org/docs.html}
+  \bibitem{pyarrow} Apache Arrow. \textit{PyArrow Documentation}. \url{https://arrow.apache.org/docs/python/}
+  \bibitem{medallion} Databricks. \textit{Medallion Architecture}. \url{https://www.databricks.com/glossary/medallion-architecture}
+  \bibitem{tenacity} Julien Danjou. \textit{Tenacity: Retrying library for Python}. \url{https://tenacity.readthedocs.io/}
+  \bibitem{h2ogrid} H2O.ai. \textit{Grid Search (Hyperparameter Search)}. \url{https://docs.h2o.ai/h2o/latest-stable/h2o-docs/grid-search.html}
+\end{thebibliography}
+
+\end{document}

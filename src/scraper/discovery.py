@@ -22,7 +22,7 @@ class URLDiscovery:
         self.scraper = scraper
         self.base_url = settings.base_url
 
-    def discover_users(self, max_users: int = 100, known_users: Set[str] = None) -> List[str]:
+    def discover_users(self, max_users: int = 100, known_users: Set[str] = None, max_scrolls: int = 50) -> List[str]:
         """Discover user profile URLs from the users listing.
 
         Args:
@@ -44,7 +44,7 @@ class URLDiscovery:
         self.scraper.page.click("button:has-text('Karma')")
         time.sleep(2)
 
-        self.scraper.scroll_to_load_all(max_scrolls=5)
+        self.scraper.scroll_to_load_all(max_scrolls=max_scrolls)
         html = self.scraper.page.content()
 
         users = parse_users_list(html)
@@ -60,7 +60,7 @@ class URLDiscovery:
         logger.info("Discovered %d new user URLs", len(urls))
         return urls
 
-    def discover_submolts(self, max_submolts: int = 50, known_submolts: Set[str] = None) -> List[str]:
+    def discover_submolts(self, max_submolts: int = 50, known_submolts: Set[str] = None, max_scrolls: int = 30) -> List[str]:
         """Discover submolt URLs from the submolts listing.
 
         Args:
@@ -76,7 +76,7 @@ class URLDiscovery:
         logger.info("Discovering submolts from %s", submolts_url)
 
         html = self.scraper.fetch_page(submolts_url, wait_selector="a[href^='/m/']")
-        self.scraper.scroll_to_load_all(max_scrolls=3)
+        self.scraper.scroll_to_load_all(max_scrolls=max_scrolls)
         html = self.scraper.page.content()
 
         submolts = parse_submolt_list(html)

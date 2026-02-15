@@ -206,8 +206,161 @@ def build_gold_layer(
         results["user_features"] = 0
         results["feature_columns"] = 0
 
+    # Build post-level features (denormalized, >20 columns)
+    try:
+        post_features_lf = engineer_post_features(
+            posts_lf=data["posts"],
+            users_lf=data["users"],
+            comments_lf=data["comments"],
+            submolts_lf=data["submolts"],
+        )
+
+        post_features_df = post_features_lf.collect()
+        post_features_path = output_dir / "post_features.parquet"
+        post_features_df.write_parquet(post_features_path)
+
+        results["post_features"] = len(post_features_df)
+        results["post_feature_columns"] = len(post_features_df.columns)
+
+        logger.info(
+            "Wrote %d post feature records with %d columns to %s",
+            len(post_features_df),
+            len(post_features_df.columns),
+            post_features_path,
+        )
+
+    except Exception as e:
+        logger.error("Failed to build post features: %s", e)
+        results["post_features"] = 0
+        results["post_feature_columns"] = 0
+
     logger.info("Gold layer build complete: %s", results)
     return results
+
+
+def engineer_post_features(
+    posts_lf: pl.LazyFrame,
+    users_lf: pl.LazyFrame,
+    comments_lf: pl.LazyFrame,
+    submolts_lf: pl.LazyFrame,
+) -> pl.LazyFrame:
+    """Engineer features at POST level for large denormalized dataset.
+
+    Creates a wide dataset (>20 columns) by joining post data with
+    user features, submolt features, and engineered metrics.
+
+    Args:
+        posts_lf: Posts LazyFrame
+        users_lf: Users LazyFrame
+        comments_lf: Comments LazyFrame
+        submolts_lf: Submolts LazyFrame
+
+    Returns:
+        Feature-engineered LazyFrame at post level (~26 columns)
+    """
+    # User-level aggregates
+    user_post_stats = (
+        posts_lf
+        .group_by("id_user")
+        .agg([
+            pl.count().alias("user_total_posts"),
+            pl.col("rating").mean().alias("user_avg_rating"),
+        ])
+    )
+
+    user_comment_stats = (
+        comments_lf
+        .group_by("id_user")
+        .agg([
+            pl.count().alias("user_comment_count"),
+        ])
+    )
+
+    # Enrich users with aggregates
+    users_enriched = (
+        users_lf
+        .join(user_post_stats, on="id_user", how="left")
+        .join(user_comment_stats, on="id_user", how="left")
+        .with_columns([
+            pl.col("user_total_posts").fill_null(0),
+            pl.col("user_avg_rating").fill_null(0.0),
+            pl.col("user_comment_count").fill_null(0),
+            (pl.col("followers") / (pl.col("following") + 1)).alias("user_follower_ratio"),
+            (pl.col("description").str.len_chars().fill_null(0)).alias("user_description_length"),
+            (pl.col("description").str.len_chars() > 0).cast(pl.Int32).alias("user_has_description"),
+            pl.col("human_owner").is_not_null().cast(pl.Int32).alias("user_has_human_owner"),
+        ])
+        .select([
+            "id_user",
+            pl.col("name").alias("user_name"),
+            pl.col("karma").alias("user_karma"),
+            pl.col("followers").alias("user_followers"),
+            pl.col("following").alias("user_following"),
+            "user_follower_ratio",
+            "user_has_description",
+            "user_has_human_owner",
+            "user_description_length",
+            "user_total_posts",
+            "user_avg_rating",
+            "user_comment_count",
+        ])
+    )
+
+    # Enrich submolts
+    submolts_enriched = (
+        submolts_lf
+        .with_columns([
+            pl.col("description").str.len_chars().fill_null(0).alias("submolt_description_length"),
+        ])
+        .select([
+            "id_submolt",
+            pl.col("name").alias("submolt_name"),
+            "submolt_description_length",
+        ])
+    )
+
+    # Build post-level features
+    post_features = (
+        posts_lf
+        .join(users_enriched, on="id_user", how="left")
+        .join(submolts_enriched, on="id_submolt", how="left")
+        .with_columns([
+            pl.col("title").str.len_chars().fill_null(0).alias("title_length"),
+            pl.col("description").str.len_chars().fill_null(0).alias("description_length"),
+            pl.col("title").str.split(" ").list.len().fill_null(0).alias("title_word_count"),
+            (pl.col("description").str.len_chars() > 0).cast(pl.Int32).alias("has_description"),
+            pl.col("submolt_name").fill_null("unknown"),
+            pl.col("submolt_description_length").fill_null(0),
+            pl.col("user_name").fill_null("unknown"),
+            pl.col("user_karma").fill_null(0),
+            pl.col("user_followers").fill_null(0),
+            pl.col("user_following").fill_null(0),
+            pl.col("user_follower_ratio").fill_null(0.0),
+            pl.col("user_has_description").fill_null(0),
+            pl.col("user_has_human_owner").fill_null(0),
+            pl.col("user_description_length").fill_null(0),
+            pl.col("user_total_posts").fill_null(0),
+            pl.col("user_avg_rating").fill_null(0.0),
+            pl.col("user_comment_count").fill_null(0),
+        ])
+        .select([
+            # Post base (6)
+            "id_post", "title", "description", "rating", "date", "scraped_at",
+            # Foreign keys (2)
+            "id_user", "id_submolt",
+            # User features (10)
+            "user_name", "user_karma", "user_followers", "user_following",
+            "user_follower_ratio", "user_has_description", "user_has_human_owner",
+            "user_description_length", "user_total_posts", "user_avg_rating",
+            "user_comment_count",
+            # Submolt features (2)
+            "submolt_name", "submolt_description_length",
+            # Post engineered features (4)
+            "title_length", "description_length", "title_word_count", "has_description",
+        ])
+    )
+
+    return post_features
 
 
 def get_modeling_data(gold_dir: Optional[Path] = None) -> pl.DataFrame:

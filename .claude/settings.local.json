@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "Bash(sqlite3:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(\"/c/Users/Paulina Peralta/anaconda3/python.exe\" -c \"import psycopg2; print\\(''psycopg2 already installed:'', psycopg2.__version__\\)\")"
+    ]
+  }
+}
