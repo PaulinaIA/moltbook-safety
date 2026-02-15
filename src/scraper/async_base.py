@@ -56,18 +56,18 @@ class PageWorker:
         self,
         url: str,
         wait_selector: Optional[str] = None,
-        wait_time: int = 2000,
+        wait_time: int = 500,
     ) -> str:
         """Fetch a page with JavaScript rendering."""
         await self.ensure_page()
         logger.debug("[Worker %d] Fetching: %s", self.worker_id, url)
-        await self.page.goto(url)
+        await self.page.goto(url, wait_until="domcontentloaded")
 
         if wait_selector:
             try:
-                await self.page.wait_for_selector(wait_selector, timeout=10000)
-            except Exception as e:
-                logger.warning("[Worker %d] Selector wait failed: %s", self.worker_id, e)
+                await self.page.wait_for_selector(wait_selector, timeout=3000)
+            except Exception:
+                pass
 
         await self.page.wait_for_timeout(wait_time)
         html = await self.page.content()
@@ -125,6 +125,10 @@ class AsyncBaseScraper:
             user_agent=settings.user_agent,
         )
 
+        # Block images, CSS, fonts, media to speed up page loads
+        await self._context.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,eot,mp4,webm}", lambda route: route.abort())
+        await self._context.route("**/*.css", lambda route: route.abort())
+
         for i in range(self.max_workers):
             worker = PageWorker(self._context, i)
             await worker.start()
@@ -181,6 +185,7 @@ class AsyncBaseScraper:
         url: str,
         wait_selector: Optional[str] = None,
         force_refresh: bool = False,
+        wait_time: Optional[int] = None,
     ) -> str:
         """Fetch a URL with rate limiting, caching, and retry."""
         if not force_refresh:
@@ -192,14 +197,14 @@ class AsyncBaseScraper:
         for attempt in range(max_retries):
             try:
                 await self._rate_limiter.wait()
-                html = await worker.fetch_page(url, wait_selector=wait_selector)
+                html = await worker.fetch_page(url, wait_selector=wait_selector, wait_time=wait_time or 500)
                 self._save_cache(url, html)
                 return html
             except Exception as e:
                 if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt
-                    logger.warning("Retry %d for %s: %s (waiting %ds)", attempt + 1, url, e, wait_time)
-                    await asyncio.sleep(wait_time)
+                    retry_wait = 2 ** attempt
+                    logger.warning("Retry %d for %s: %s (waiting %ds)", attempt + 1, url, e, retry_wait)
+                    await asyncio.sleep(retry_wait)
                 else:
                     logger.error("Failed after %d retries for %s: %s", max_retries, url, e)
                     raise
@@ -209,6 +214,7 @@ class AsyncBaseScraper:
         urls: List[str],
         wait_selector: Optional[str] = None,
         force_refresh: bool = False,
+        wait_time: Optional[int] = None,
     ) -> List[tuple]:
         """Fetch multiple URLs in parallel using the worker pool.
 
@@ -218,7 +224,7 @@ class AsyncBaseScraper:
         async def _fetch_one(url: str, worker: PageWorker):
             async with self._semaphore:
                 try:
-                    html = await self.fetch_url(worker, url, wait_selector, force_refresh)
+                    html = await self.fetch_url(worker, url, wait_selector, force_refresh, wait_time)
                     return (url, html)
                 except Exception as e:
                     logger.error("Failed to fetch %s: %s", url, e)

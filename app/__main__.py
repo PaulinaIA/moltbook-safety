@@ -151,6 +151,49 @@ def scrape_massive(
     click.echo(f"Time elapsed:   {results.get('elapsed_seconds', 0)}s")
 
 
+@cli.command(name="enrich-users")
+@click.option("--workers", default=3, help="Number of parallel browser pages (keep low)")
+@click.option("--headless/--no-headless", default=True, help="Run browser headless")
+def enrich_users(workers: int, headless: bool) -> None:
+    """Enrich incomplete user profiles (slow, avoids rate limit)."""
+    import asyncio
+
+    logger = logging.getLogger(__name__)
+    logger.info("Starting user enrichment (slow mode)")
+
+    from src.database.connection import init_database, check_database_exists
+    from src.database.operations import DatabaseOperations
+    from src.scraper.async_scrapers import AsyncMoltbookScraper
+
+    if not check_database_exists():
+        click.echo("Database not found. Run scrape-massive first.")
+        return
+
+    async def _enrich():
+        db_ops = DatabaseOperations()
+        incomplete = db_ops.get_incomplete_user_names()
+        if not incomplete:
+            click.echo("All users already have complete profiles!")
+            return
+
+        click.echo(f"Found {len(incomplete)} users with incomplete profiles")
+        async with AsyncMoltbookScraper(
+            headless=headless, max_workers=workers, rate_limit=3.0,
+        ) as scraper:
+            enriched = 0
+            batch_size = 3
+            for i in range(0, len(incomplete), batch_size):
+                batch = incomplete[i:i + batch_size]
+                urls = [f"{scraper.base_url}/u/{name}" for name in batch]
+                users = await scraper.scrape_users_parallel(urls, force_refresh=True)
+                enriched += len(users)
+                click.echo(f"  Enriched {enriched}/{len(incomplete)} users...")
+                await asyncio.sleep(5)  # 5 second pause between batches
+            click.echo(f"\nDone! Enriched {enriched} user profiles.")
+
+    asyncio.run(_enrich())
+
+
 @cli.command(name="init-db")
 @click.option("--postgres", is_flag=True, help="Initialize PostgreSQL database")
 def init_db(postgres: bool) -> None:
@@ -196,8 +239,10 @@ def build() -> None:
     gold_results = build_gold_layer()
 
     click.echo("\n--- Gold Layer ---")
-    click.echo(f"User features: {gold_results.get('user_features', 0)} records")
-    click.echo(f"Feature columns: {gold_results.get('feature_columns', 0)}")
+    click.echo(f"User features:    {gold_results.get('user_features', 0)} records ({gold_results.get('feature_columns', 0)} columns)")
+    click.echo(f"Post features:    {gold_results.get('post_features', 0)} records ({gold_results.get('post_feature_columns', 0)} columns)")
+    click.echo(f"Comment features: {gold_results.get('comment_features', 0)} records ({gold_results.get('comment_feature_columns', 0)} columns)")
+    click.echo(f"\nTotal gold records: {gold_results.get('user_features', 0) + gold_results.get('post_features', 0) + gold_results.get('comment_features', 0)}")
 
 
 @cli.command()

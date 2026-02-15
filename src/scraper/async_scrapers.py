@@ -28,8 +28,8 @@ class AsyncMoltbookScraper:
         self,
         db_ops: Optional[DatabaseOperations] = None,
         headless: bool = True,
-        max_workers: int = 10,
-        rate_limit: float = 0.5,
+        max_workers: int = 15,
+        rate_limit: float = 0.1,
     ):
         self.db_ops = db_ops or DatabaseOperations()
         self.headless = headless
@@ -88,7 +88,7 @@ class AsyncMoltbookScraper:
             for i in range(max_scrolls):
                 prev = await page.evaluate("document.body.scrollHeight")
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(400)
                 curr = await page.evaluate("document.body.scrollHeight")
                 if curr == prev:
                     logger.info("Users: reached end after %d scrolls", i + 1)
@@ -135,7 +135,7 @@ class AsyncMoltbookScraper:
             for i in range(max_scrolls):
                 prev = await page.evaluate("document.body.scrollHeight")
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(400)
                 curr = await page.evaluate("document.body.scrollHeight")
                 if curr == prev:
                     logger.info("Submolts: reached end after %d scrolls", i + 1)
@@ -163,38 +163,75 @@ class AsyncMoltbookScraper:
 
     # ─── Parallel scraping ───────────────────────────────────────
 
-    async def scrape_users_parallel(self, user_urls: List[str]) -> List[User]:
-        """Scrape user profiles in parallel batches."""
-        logger.info("Scraping %d users in parallel...", len(user_urls))
-        results = await self.scraper.fetch_many(user_urls, wait_selector="h1, h2")
+    async def scrape_users_parallel(self, user_urls: List[str], force_refresh: bool = False) -> List[User]:
+        """Scrape user profiles. Uses slow batching only for force_refresh (enrichment)."""
+        logger.info("Scraping %d users (force_refresh=%s)...", len(user_urls), force_refresh)
 
-        users = []
-        for url, html in results:
-            if html is None:
-                continue
-            try:
-                username = url.split("/u/")[-1]
-                user_data = parse_user_profile(html, username)
-                user = User.from_scraped_data(**user_data)
-                users.append(user)
-            except Exception as e:
-                logger.error("Failed to parse user from %s: %s", url, e)
+        all_users = []
+        total_skipped = 0
 
-        # Batch upsert
-        if users:
-            count = self.db_ops.upsert_many(users)
-            logger.info("Saved %d users to database", count)
+        # Slow batching only for enrichment (force_refresh), fast for normal scraping
+        if force_refresh:
+            batch_size = 10
+            wait_time = 2000
+            batch_delay = 2
+        else:
+            batch_size = len(user_urls)  # all at once
+            wait_time = 500
+            batch_delay = 0
 
-        return users
+        for batch_start in range(0, len(user_urls), batch_size):
+            batch_urls = user_urls[batch_start:batch_start + batch_size]
+            if force_refresh:
+                logger.info("User batch %d/%d (%d profiles)...",
+                            batch_start // batch_size + 1,
+                            (len(user_urls) + batch_size - 1) // batch_size,
+                            len(batch_urls))
+
+            results = await self.scraper.fetch_many(
+                batch_urls, wait_selector="h1, h2",
+                force_refresh=force_refresh, wait_time=wait_time,
+            )
+
+            users = []
+            skipped = 0
+            for url, html in results:
+                if html is None:
+                    continue
+                try:
+                    if "Rate limit exceeded" in (html or ""):
+                        skipped += 1
+                        continue
+                    username = url.split("/u/")[-1]
+                    user_data = parse_user_profile(html, username)
+                    user = User.from_scraped_data(**user_data)
+                    users.append(user)
+                except Exception as e:
+                    logger.error("Failed to parse user from %s: %s", url, e)
+
+            total_skipped += skipped
+
+            if users:
+                count = self.db_ops.upsert_many(users)
+                logger.info("Saved %d users to database", count)
+                all_users.extend(users)
+
+            if batch_delay and batch_start + batch_size < len(user_urls):
+                await asyncio.sleep(batch_delay)
+
+        if total_skipped:
+            logger.warning("Skipped %d rate-limited profiles total", total_skipped)
+
+        return all_users
 
     async def _fetch_submolt_with_scroll(self, url: str, max_scrolls: int = 50) -> Optional[str]:
         """Fetch a submolt page with scrolling to load all posts."""
         page = await self._create_discovery_page()
         try:
             await self.scraper._rate_limiter.wait()
-            await page.goto(url)
+            await page.goto(url, wait_until="domcontentloaded")
             try:
-                await page.wait_for_selector("a[href^='/post/']", timeout=10000)
+                await page.wait_for_selector("a[href^='/post/']", timeout=3000)
             except Exception:
                 pass
 
@@ -202,7 +239,7 @@ class AsyncMoltbookScraper:
             for i in range(max_scrolls):
                 prev = await page.evaluate("document.body.scrollHeight")
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(400)
                 curr = await page.evaluate("document.body.scrollHeight")
                 if curr == prev:
                     break
@@ -239,6 +276,8 @@ class AsyncMoltbookScraper:
         logger.info("Fetching %d submolts with scroll...", len(submolt_urls))
         results = await asyncio.gather(*tasks)
 
+        discovered_submolt_names = set()  # submolt names found in posts (cross-discovery)
+
         for url, html in results:
             if html is None:
                 continue
@@ -253,6 +292,10 @@ class AsyncMoltbookScraper:
                     post_url = post_data.get("post_url")
                     if post_url:
                         all_post_urls.append((post_url, submolt.id_submolt, name, post_data))
+                    # Cross-discover submolts referenced in posts
+                    ref_submolt = post_data.get("submolt_name")
+                    if ref_submolt:
+                        discovered_submolt_names.add(ref_submolt)
             except Exception as e:
                 logger.error("Failed to parse submolt from %s: %s", url, e)
 
@@ -319,40 +362,68 @@ class AsyncMoltbookScraper:
                 self.db_ops.upsert_many(chunk)
             logger.info("Saved %d posts", len(posts))
 
-        # Scrape author profiles + comments in parallel
-        parallel_tasks = []
-        if new_users:
-            new_user_urls = [f"{self.base_url}/u/{u.name}" for u in new_users if u.name]
-            logger.info("Scraping %d new author profiles + comments in parallel...", len(new_user_urls))
-            parallel_tasks.append(self.scrape_users_parallel(new_user_urls))
-
+        # Scrape comments from post pages
         if post_urls_for_comments:
-            parallel_tasks.append(self._scrape_comments_parallel(
+            await self._scrape_comments_parallel(
                 post_urls_for_comments, max_comments_per_post,
                 known_user_names=known_user_names, known_user_ids=known_user_ids,
-            ))
-
-        if parallel_tasks:
-            await asyncio.gather(*parallel_tasks)
+            )
 
         return {
             "submolts": len(submolts),
             "posts": len(posts),
+            "discovered_submolt_names": discovered_submolt_names,
         }
+
+    async def _fetch_post_with_scroll(self, url: str, max_scrolls: int = 30) -> Optional[str]:
+        """Fetch a post page with scrolling to load all comments."""
+        page = await self._create_discovery_page()
+        try:
+            await self.scraper._rate_limiter.wait()
+            await page.goto(url, wait_until="domcontentloaded")
+            try:
+                await page.wait_for_selector("div.mt-6", timeout=3000)
+            except Exception:
+                pass
+
+            for i in range(max_scrolls):
+                prev = await page.evaluate("document.body.scrollHeight")
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await page.wait_for_timeout(400)
+                curr = await page.evaluate("document.body.scrollHeight")
+                if curr == prev:
+                    break
+
+            return await page.content()
+        except Exception as e:
+            logger.error("Failed to fetch post %s: %s", url, e)
+            return None
+        finally:
+            await page.close()
 
     async def _scrape_comments_parallel(
         self,
         post_url_pairs: List[tuple],  # (url, post_id)
-        max_comments: int = 100,
+        max_comments: int = 500,
         known_user_names: dict = None,
         known_user_ids: dict = None,
     ) -> List[Comment]:
-        """Scrape comments from post pages in parallel."""
-        urls = [pair[0] for pair in post_url_pairs]
+        """Scrape comments from post pages in parallel with scrolling."""
         url_to_post_id = {pair[0]: pair[1] for pair in post_url_pairs}
 
-        logger.info("Scraping comments from %d post pages in parallel...", len(urls))
-        results = await self.scraper.fetch_many(urls, wait_selector="div.mt-6")
+        logger.info("Scraping comments from %d post pages (with scroll)...", len(post_url_pairs))
+
+        # Fetch post pages with scroll to load all comments
+        sem = asyncio.Semaphore(self.max_workers)
+
+        async def _fetch_one(url):
+            async with sem:
+                html = await self._fetch_post_with_scroll(url)
+                return (url, html)
+
+        tasks = [_fetch_one(pair[0]) for pair in post_url_pairs]
+        results = await asyncio.gather(*tasks)
+        logger.info("Fetched all %d post pages", len(post_url_pairs))
 
         # Use passed cache or load from DB
         if known_user_names is None or known_user_ids is None:
@@ -396,17 +467,12 @@ class AsyncMoltbookScraper:
             except Exception as e:
                 logger.error("Failed to parse comments from %s: %s", url, e)
 
-        # Batch save new users from comment authors, then scrape their profiles
+        # Batch save new users from comment authors (skip profile scraping for speed)
         if new_users:
             for i in range(0, len(new_users), 500):
                 chunk = new_users[i:i + 500]
                 self.db_ops.upsert_many(chunk)
             logger.info("Saved %d new users from comment authors", len(new_users))
-
-            # Scrape profiles to fill in karma, description, etc.
-            new_user_urls = [f"{self.base_url}/u/{u.name}" for u in new_users if u.name]
-            logger.info("Scraping %d new comment author profiles...", len(new_user_urls))
-            await self.scrape_users_parallel(new_user_urls)
 
         if all_comments:
             # Batch upsert in chunks of 500
@@ -460,13 +526,52 @@ class AsyncMoltbookScraper:
         logger.info("--- Phase 2: User Profiles ---")
         users = await self.scrape_users_parallel(user_urls)
 
-        # Phase 3: Scrape submolts + posts + comments
-        logger.info("--- Phase 3: Submolts + Posts + Comments ---")
-        submolt_results = await self.scrape_submolts_parallel(
-            submolt_urls,
-            max_posts_per_submolt=max_posts_per_submolt,
-            max_comments_per_post=max_comments_per_post,
-        )
+        # Phase 3: Scrape submolts + posts + comments (with re-discovery loop)
+        scraped_submolt_names = set()
+        round_num = 0
+        current_urls = submolt_urls
+        max_rounds = 5  # prevent infinite loops
+
+        while current_urls and round_num < max_rounds:
+            round_num += 1
+            logger.info("--- Phase 3 Round %d: Scraping %d submolts + posts + comments ---",
+                        round_num, len(current_urls))
+
+            submolt_results = await self.scrape_submolts_parallel(
+                current_urls,
+                max_posts_per_submolt=max_posts_per_submolt,
+                max_comments_per_post=max_comments_per_post,
+            )
+
+            # Track which submolts we've already scraped
+            for url in current_urls:
+                scraped_submolt_names.add(url.split("/m/")[-1])
+
+            # Cross-discovery: find new submolts referenced in posts
+            discovered = submolt_results.get("discovered_submolt_names", set())
+            known_in_db = set(self.db_ops.get_submolt_names())
+            new_submolt_names = discovered - scraped_submolt_names - known_in_db
+
+            if new_submolt_names and len(scraped_submolt_names) < max_submolts:
+                remaining = max_submolts - len(scraped_submolt_names)
+                new_names_list = list(new_submolt_names)[:remaining]
+                current_urls = [f"{self.base_url}/m/{name}" for name in new_names_list]
+                logger.info("Cross-discovery found %d new submolts, scraping %d",
+                            len(new_submolt_names), len(current_urls))
+            else:
+                current_urls = []
+                logger.info("No new submolts to discover (scraped %d total)", len(scraped_submolt_names))
+
+        # Phase 4: Enrich incomplete user profiles (karma=0 or description=NULL)
+        logger.info("--- Phase 4: Enriching incomplete user profiles ---")
+        incomplete_names = self.db_ops.get_incomplete_user_names()
+        if incomplete_names:
+            logger.info("Cooling down 10s before enriching %d users...", len(incomplete_names))
+            await asyncio.sleep(10)
+            enrich_urls = [f"{self.base_url}/u/{name}" for name in incomplete_names]
+            await self.scrape_users_parallel(enrich_urls, force_refresh=True)
+        else:
+            logger.info("All users have complete profiles")
 
         # Final counts from database
         from src.database.models import Post, Comment, SubMolt

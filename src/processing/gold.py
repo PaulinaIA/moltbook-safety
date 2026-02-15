@@ -234,6 +234,34 @@ def build_gold_layer(
         results["post_features"] = 0
         results["post_feature_columns"] = 0
 
+    # Build comment-level features (maximum row count for 200K+ target)
+    try:
+        comment_features_lf = engineer_comment_features(
+            comments_lf=data["comments"],
+            posts_lf=data["posts"],
+            users_lf=data["users"],
+            submolts_lf=data["submolts"],
+        )
+
+        comment_features_df = comment_features_lf.collect()
+        comment_features_path = output_dir / "comment_features.parquet"
+        comment_features_df.write_parquet(comment_features_path)
+
+        results["comment_features"] = len(comment_features_df)
+        results["comment_feature_columns"] = len(comment_features_df.columns)
+
+        logger.info(
+            "Wrote %d comment feature records with %d columns to %s",
+            len(comment_features_df),
+            len(comment_features_df.columns),
+            comment_features_path,
+        )
+
+    except Exception as e:
+        logger.error("Failed to build comment features: %s", e)
+        results["comment_features"] = 0
+        results["comment_feature_columns"] = 0
+
     logger.info("Gold layer build complete: %s", results)
     return results
 
@@ -361,6 +389,150 @@ def engineer_post_features(
     )
 
     return post_features
+
+
+def engineer_comment_features(
+    comments_lf: pl.LazyFrame,
+    posts_lf: pl.LazyFrame,
+    users_lf: pl.LazyFrame,
+    submolts_lf: pl.LazyFrame,
+) -> pl.LazyFrame:
+    """Engineer features at COMMENT level for maximum row count.
+
+    Creates a wide dataset (>25 columns) by joining each comment with
+    its post, author, post author, and submolt data.
+
+    Args:
+        comments_lf: Comments LazyFrame
+        posts_lf: Posts LazyFrame
+        users_lf: Users LazyFrame (comment + post authors)
+        submolts_lf: Submolts LazyFrame
+
+    Returns:
+        Feature-engineered LazyFrame at comment level
+    """
+    # Post-level comment stats (for context)
+    post_comment_stats = (
+        comments_lf
+        .group_by("id_post")
+        .agg([
+            pl.count().alias("post_total_comments"),
+            pl.col("rating").mean().alias("post_avg_comment_rating"),
+            pl.col("rating").max().alias("post_max_comment_rating"),
+            pl.col("description").str.len_chars().mean().alias("post_avg_comment_length"),
+        ])
+    )
+
+    # Enrich posts with comment stats + submolt
+    posts_enriched = (
+        posts_lf
+        .join(post_comment_stats, on="id_post", how="left")
+        .join(
+            submolts_lf.select([
+                "id_submolt",
+                pl.col("name").alias("submolt_name"),
+            ]),
+            on="id_submolt", how="left",
+        )
+        .with_columns([
+            pl.col("post_total_comments").fill_null(0),
+            pl.col("post_avg_comment_rating").fill_null(0.0),
+            pl.col("post_max_comment_rating").fill_null(0),
+            pl.col("post_avg_comment_length").fill_null(0.0),
+            pl.col("submolt_name").fill_null("unknown"),
+        ])
+        .select([
+            "id_post",
+            pl.col("id_user").alias("post_author_id"),
+            pl.col("title").alias("post_title"),
+            pl.col("rating").alias("post_rating"),
+            pl.col("date").alias("post_date"),
+            "id_submolt",
+            "submolt_name",
+            "post_total_comments",
+            "post_avg_comment_rating",
+            "post_max_comment_rating",
+            "post_avg_comment_length",
+            pl.col("title").str.len_chars().fill_null(0).alias("post_title_length"),
+            pl.col("description").str.len_chars().fill_null(0).alias("post_description_length"),
+        ])
+    )
+
+    # Comment author info
+    comment_author = (
+        users_lf
+        .select([
+            "id_user",
+            pl.col("name").alias("comment_author_name"),
+            pl.col("karma").alias("comment_author_karma"),
+            pl.col("followers").alias("comment_author_followers"),
+            pl.col("following").alias("comment_author_following"),
+            (pl.col("followers") / (pl.col("following") + 1)).alias("comment_author_follower_ratio"),
+            pl.col("description").str.len_chars().fill_null(0).alias("comment_author_desc_length"),
+            pl.col("human_owner").is_not_null().cast(pl.Int32).alias("comment_author_has_human_owner"),
+        ])
+    )
+
+    # Post author info
+    post_author = (
+        users_lf
+        .select([
+            pl.col("id_user").alias("post_author_id"),
+            pl.col("name").alias("post_author_name"),
+            pl.col("karma").alias("post_author_karma"),
+        ])
+    )
+
+    # Build comment-level features
+    comment_features = (
+        comments_lf
+        # Join with post info
+        .join(posts_enriched, on="id_post", how="left")
+        # Join with comment author
+        .join(comment_author, on="id_user", how="left")
+        # Join with post author
+        .join(post_author, on="post_author_id", how="left")
+        # Engineer comment-specific features
+        .with_columns([
+            pl.col("description").str.len_chars().fill_null(0).alias("comment_length"),
+            pl.col("description").str.split(" ").list.len().fill_null(0).alias("comment_word_count"),
+            (pl.col("description").str.len_chars() > 0).cast(pl.Int32).alias("has_comment_text"),
+            # Fill nulls from joins
+            pl.col("comment_author_name").fill_null("unknown"),
+            pl.col("comment_author_karma").fill_null(0),
+            pl.col("comment_author_followers").fill_null(0),
+            pl.col("comment_author_following").fill_null(0),
+            pl.col("comment_author_follower_ratio").fill_null(0.0),
+            pl.col("comment_author_desc_length").fill_null(0),
+            pl.col("comment_author_has_human_owner").fill_null(0),
+            pl.col("post_title").fill_null(""),
+            pl.col("post_rating").fill_null(0),
+            pl.col("post_author_name").fill_null("unknown"),
+            pl.col("post_author_karma").fill_null(0),
+            pl.col("submolt_name").fill_null("unknown"),
+        ])
+        .select([
+            # Comment base (5)
+            "id_comment", "id_user", "id_post", "rating", "date",
+            # Comment features (3)
+            "comment_length", "comment_word_count", "has_comment_text",
+            # Comment author (7)
+            "comment_author_name", "comment_author_karma",
+            "comment_author_followers", "comment_author_following",
+            "comment_author_follower_ratio", "comment_author_desc_length",
+            "comment_author_has_human_owner",
+            # Post context (8)
+            "post_title", "post_rating", "post_date",
+            "post_title_length", "post_description_length",
+            "post_total_comments", "post_avg_comment_rating", "post_max_comment_rating",
+            # Post author (2)
+            "post_author_name", "post_author_karma",
+            # Submolt (2)
+            "id_submolt", "submolt_name",
+        ])
+    )
+
+    return comment_features
 
 
 def get_modeling_data(gold_dir: Optional[Path] = None) -> pl.DataFrame:

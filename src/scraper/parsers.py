@@ -193,17 +193,24 @@ def parse_user_profile(html: str, username: str) -> Dict[str, Any]:
             result["karma"] = parse_number(match.group(1))
             break
 
-    # Find description - usually in meta or a paragraph
-    meta_desc = soup.find("meta", {"name": "description"})
-    if meta_desc:
-        result["description"] = safe_get_attr(meta_desc, "content")
+    # Find description - look for the bio paragraph after the username h1
+    h1 = soup.select_one("h1")
+    if h1:
+        # Bio is the <p> sibling right after the h1's parent div
+        next_p = h1.find_next("p")
+        if next_p:
+            bio_text = safe_get_text(next_p)
+            # Skip if it's the generic site description
+            if bio_text and "social network" not in bio_text.lower():
+                result["description"] = bio_text
 
-    # Look for bio/description in page content
-    for selector in ["p.bio", "div.description", "p.text-gray-400"]:
-        bio_elem = soup.select_one(selector)
-        if bio_elem:
-            result["description"] = safe_get_text(bio_elem)
-            break
+    # Fallback: try known selectors
+    if not result["description"]:
+        for selector in ["p.bio", "div.description"]:
+            bio_elem = soup.select_one(selector)
+            if bio_elem:
+                result["description"] = safe_get_text(bio_elem)
+                break
 
     # Find human owner (Twitter handle)
     twitter_link = soup.select_one("a[href*='twitter.com'], a[href*='x.com']")
@@ -213,8 +220,8 @@ def parse_user_profile(html: str, username: str) -> Dict[str, Any]:
         if match:
             result["human_owner"] = match.group(1)
 
-    # Find join date
-    joined_pattern = re.compile(r"joined\s+(.+?)(?:\s*\||$)", re.I)
+    # Find join date - look for "Joined M/D/YYYY" pattern
+    joined_pattern = re.compile(r"joined\s+(\d{1,2}/\d{1,2}/\d{4})", re.I)
     joined_match = joined_pattern.search(body_text)
     if joined_match:
         result["joined"] = joined_match.group(1).strip()
@@ -231,7 +238,10 @@ def parse_user_profile(html: str, username: str) -> Dict[str, Any]:
     if following_match:
         result["following"] = parse_number(following_match.group(1))
 
-    logger.debug("Parsed user profile: %s (karma=%d)", username, result["karma"])
+    logger.info("Parsed user profile: %s → karma=%s, desc=%s, joined=%s, followers=%s",
+                username, result["karma"],
+                result["description"][:30] if result["description"] else "NULL",
+                result["joined"], result["followers"])
     return result
 
 
@@ -426,7 +436,7 @@ def parse_posts_from_page(html: str, submolt_name: Optional[str] = None, max_pos
     return posts
 
 
-# def parse_comments(html: str, post_id: str, max_comments: Optional[int] = 10) -> List[Dict[str, Any]]:
+# def parse_comments(html: str, post_id: str, max_comments: Optional[int] = 500) -> List[Dict[str, Any]]:
     # """Parse comments from a post page.
     # 
     # Args:
@@ -482,7 +492,7 @@ def parse_posts_from_page(html: str, submolt_name: Optional[str] = None, max_pos
     # logger.info("Parsed %d comments", len(comments))
     # return comments
 
-def parse_comments(html: str, post_id: str, max_comments: Optional[int] = 10) -> List[Dict[str, Any]]:
+def parse_comments(html: str, post_id: str, max_comments: Optional[int] = 500) -> List[Dict[str, Any]]:
     soup = BeautifulSoup(html, "lxml")
     comments: List[Dict[str, Any]] = []
 

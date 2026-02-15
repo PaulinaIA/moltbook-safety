@@ -237,6 +237,17 @@ class DatabaseOperations:
             rows = cursor.fetchall()
             return [dict(row)["name"] if isinstance(row, dict) else row[0] for row in rows]
 
+    def get_incomplete_user_names(self) -> List[str]:
+        """Get usernames of users with incomplete profiles (no description or karma=0)."""
+        with get_connection(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name FROM users WHERE name IS NOT NULL "
+                "AND (description IS NULL OR karma = 0 OR karma IS NULL)"
+            )
+            rows = cursor.fetchall()
+            return [dict(row)["name"] if isinstance(row, dict) else row[0] for row in rows]
+
     def get_submolt_names(self) -> List[str]:
         """Get all submolt names for URL discovery."""
         with get_connection(self.db_path) as conn:
