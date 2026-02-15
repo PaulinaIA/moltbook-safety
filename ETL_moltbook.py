@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
 ETL Moltbook -- AWS Glue Python Shell Job
-Scraping (requests + BeautifulSoup), transformacion minima y carga en PostgreSQL (RDS).
+
+Navego moltbook.com con Playwright (headless), guardo el HTML crudo
+en S3, parseo con BeautifulSoup y cargo a PostgreSQL (RDS).
+
 Sin Spark, sin GlueContext, sin DynamicFrames.
 """
 
 import hashlib
 import logging
+import os
 import re
 import sys
 import time
@@ -16,7 +20,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Type, TypeVar, Union
-from urllib.parse import urlparse
 
 # ---------------------------------------------------------------------------
 # Logging -- lo mando a stdout para que CloudWatch lo capture
@@ -48,6 +51,7 @@ def _resolve_job_params() -> dict:
             "DB_NAME",
             "DB_USER",
             "DB_PASSWORD",
+            "S3_HTML_BUCKET",
         ])
         return params
     except Exception:
@@ -64,7 +68,39 @@ def _resolve_job_params() -> dict:
             i += 2
         else:
             i += 1
+
+    # Variables de entorno como fallback adicional
+    for key in ("S3_HTML_BUCKET", "DB_HOST", "DB_PORT", "DB_NAME",
+                "DB_USER", "DB_PASSWORD", "BATCH_SIZE", "MAX_USERS"):
+        if key not in params and os.environ.get(key):
+            params[key] = os.environ[key]
+
     return params
+
+
+# ===========================================================================
+# CONSTANTES
+# ===========================================================================
+
+BASE_URL = "https://www.moltbook.com"
+
+# Submolts que conozco de antemano. Los uso para iterar directamente
+# en vez de depender de que el listing de /m cargue todo con scroll.
+SEED_SUBMOLTS = [
+    "0xdeadbeef", "3dp", "agent-philosophy", "agentity", "agentlegaladvice",
+    "ai-solopreneurs", "aidev", "aithernet", "announcements", "arrival",
+    "blessmyheart", "blesstheirhearts", "blumeyield", "claudecodeagents",
+    "clawdistan", "corinthians", "creatoreconomy", "currency", "debugging",
+    "drugs", "economics", "embody", "ethics-convergence", "evil", "feedback",
+    "firstworldaiproblems", "flame-advice", "general", "geointel", "hiremyagent",
+    "introduction", "introductions", "latenightthoughts", "linux", "liquidation",
+    "lobloop", "memecoins", "memes", "minting-claw-mbc20-15", "moltreg",
+    "moltwild", "open-claw", "portfoliomanagement", "predictionmarkets",
+    "projects", "quant-heytraders", "quantalpha", "remote-work", "seeds",
+    "selfimprovement", "shitpost", "sixnations", "soul", "startups", "thoughts",
+    "threatintel", "todayilearned", "trellis-workflows", "turkishagents",
+    "uri-mal", "x402", "xana-monolith", "xrpledger", "xrplevm",
+]
 
 
 # ===========================================================================
@@ -280,7 +316,6 @@ def pg_connection(host: str, port: int, dbname: str, user: str, password: str):
 
 # El orden de creacion importa por las FK
 SCHEMA_STATEMENTS = [
-    # -- Tablas base
     """
     CREATE TABLE IF NOT EXISTS users (
         id_user     VARCHAR(64) PRIMARY KEY,
@@ -302,7 +337,6 @@ SCHEMA_STATEMENTS = [
         scraped_at  VARCHAR(64) NOT NULL
     )
     """,
-    # -- Intermedia: depende de users y sub_molt
     """
     CREATE TABLE IF NOT EXISTS user_submolt (
         id_user    VARCHAR(64) NOT NULL,
@@ -333,7 +367,6 @@ SCHEMA_STATEMENTS = [
         scraped_at  VARCHAR(64) NOT NULL
     )
     """,
-    # -- Indexes
     "CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(id_user)",
     "CREATE INDEX IF NOT EXISTS idx_posts_submolt ON posts(id_submolt)",
     "CREATE INDEX IF NOT EXISTS idx_comments_user ON comments(id_user)",
@@ -342,7 +375,6 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_users_name ON users(name)",
 ]
 
-# Las FK las agrego en sentencias separadas para que no falle si ya existen
 FK_STATEMENTS = [
     "ALTER TABLE user_submolt ADD CONSTRAINT fk_us_user FOREIGN KEY (id_user) REFERENCES users(id_user)",
     "ALTER TABLE user_submolt ADD CONSTRAINT fk_us_submolt FOREIGN KEY (id_submolt) REFERENCES sub_molt(id_submolt)",
@@ -385,10 +417,7 @@ class Database:
             self._host, self._port, self._dbname, self._user, self._password,
         )
 
-    # -- DDL ----------------------------------------------------------------
-
     def ensure_tables(self) -> None:
-        """Creo las tablas si no existen. Si ya estan, no hago nada."""
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -399,13 +428,11 @@ class Database:
                     logger.info("Tablas ya existen, salto DDL.")
                     return
 
-        # Creo las tablas
         with self._connect() as conn:
             with conn.cursor() as cur:
                 for stmt in SCHEMA_STATEMENTS:
                     cur.execute(stmt)
 
-        # FKs por separado -- si ya existen las ignoro
         for fk in FK_STATEMENTS:
             try:
                 with self._connect() as conn:
@@ -418,10 +445,7 @@ class Database:
 
         logger.info("Esquema creado correctamente.")
 
-    # -- Bulk upsert --------------------------------------------------------
-
     def bulk_upsert(self, entities: List[Any]) -> int:
-        """Upsert por lotes usando execute_values de psycopg2."""
         if not entities:
             return 0
         etype = type(entities[0])
@@ -434,7 +458,6 @@ class Database:
         columns = list(data_list[0].keys())
         update_cols = [c for c in columns if c not in pk_cols]
 
-        # Para user_submolt no hay columnas de update, uso DO NOTHING
         if update_cols:
             conflict_action = "DO UPDATE SET " + ", ".join(
                 f"{c} = EXCLUDED.{c}" for c in update_cols
@@ -461,7 +484,6 @@ class Database:
                         execute_values(cur, sql, rows, template=template, page_size=len(rows))
                 total += len(rows)
             except Exception:
-                # Fallback row-by-row si execute_values tiene algun problema
                 placeholders = ", ".join("%s" for _ in columns)
                 row_sql = (
                     f"INSERT INTO {table} ({col_names}) VALUES ({placeholders}) "
@@ -475,8 +497,6 @@ class Database:
 
         logger.info("bulk_upsert: %d registros en %s", total, table)
         return total
-
-    # -- Consultas auxiliares ------------------------------------------------
 
     def get_user_names(self) -> List[str]:
         with self._connect() as conn:
@@ -508,7 +528,58 @@ class Database:
 
 
 # ===========================================================================
-# FETCHER (requests, sin Playwright)
+# S3 HTML STORAGE
+# ===========================================================================
+
+class S3HTMLStore:
+    """Guardo y recupero HTML crudo desde S3.
+
+    El key de cada objeto sigue el patron: html/{entity_type}/{name}_{hash}.html
+    para que sea determinista y trazable.
+    """
+
+    def __init__(self, bucket: str, prefix: str = "html"):
+        self.bucket = bucket
+        self.prefix = prefix.rstrip("/")
+        self._client = None
+
+    @property
+    def s3(self):
+        if self._client is None:
+            import boto3
+            self._client = boto3.client("s3")
+        return self._client
+
+    def _make_key(self, entity_type: str, name: str) -> str:
+        """Genero un key determinista: html/submolt/general_a1b2c3d4.html"""
+        h = hashlib.md5(name.encode()).hexdigest()[:8]
+        safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
+        return f"{self.prefix}/{entity_type}/{safe_name}_{h}.html"
+
+    def put(self, html: str, entity_type: str, name: str) -> str:
+        """Subo el HTML a S3 y devuelvo el key."""
+        key = self._make_key(entity_type, name)
+        self.s3.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=html.encode("utf-8"),
+            ContentType="text/html; charset=utf-8",
+        )
+        logger.debug("S3 PUT s3://%s/%s (%d bytes)", self.bucket, key, len(html))
+        return key
+
+    def get(self, entity_type: str, name: str) -> Optional[str]:
+        """Intento leer HTML desde S3. None si no existe."""
+        key = self._make_key(entity_type, name)
+        try:
+            response = self.s3.get_object(Bucket=self.bucket, Key=key)
+            return response["Body"].read().decode("utf-8")
+        except Exception:
+            return None
+
+
+# ===========================================================================
+# PLAYWRIGHT FETCHER
 # ===========================================================================
 
 class RateLimiter:
@@ -523,64 +594,143 @@ class RateLimiter:
         self._last = time.time()
 
 
-class RequestsFetcher:
-    """Obtengo HTML con requests. Nada de JS rendering."""
+class PlaywrightFetcher:
+    """Navego paginas con Playwright para renderizar el JS de moltbook (SPA Next.js).
+    Cada pagina que obtengo la persisto en S3 antes de devolver el HTML.
+    """
 
-    use_browser = False
-
-    def __init__(self, rate_limit: float = 1.0, timeout: int = 30):
+    def __init__(
+        self,
+        s3_store: Optional[S3HTMLStore] = None,
+        rate_limit: float = 1.0,
+        timeout: int = 30,
+        headless: bool = True,
+    ):
+        self._s3 = s3_store
         self._limiter = RateLimiter(rate_limit)
         self._timeout = timeout
-        self._session = None
-        self.cache_dir = Path("/tmp/moltbook_cache")
+        self._headless = headless
+        self._pw = None
+        self._browser = None
+        self._page = None
 
-    @property
-    def session(self):
-        import requests as req
-        if self._session is None:
-            self._session = req.Session()
-            self._session.headers.update({
-                "User-Agent": "MoltbookScraper/1.0 (Academic Research Project)",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-            })
-        return self._session
+    def start(self) -> None:
+        if self._browser is not None:
+            return
+        from playwright.sync_api import sync_playwright
+        logger.info("Iniciando Playwright (headless=%s)", self._headless)
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.chromium.launch(headless=self._headless)
+        self._page = self._browser.new_page(
+            user_agent="MoltbookScraper/1.0 (Academic Research Project)",
+        )
+        self._page.set_default_timeout(self._timeout * 1000)
 
     def close(self) -> None:
-        if self._session:
+        if self._page:
             try:
-                self._session.close()
+                self._page.close()
             except Exception:
                 pass
-            self._session = None
+            self._page = None
+        if self._browser:
+            try:
+                self._browser.close()
+            except Exception:
+                pass
+            self._browser = None
+        if self._pw:
+            try:
+                self._pw.stop()
+            except Exception:
+                pass
+            self._pw = None
+        logger.info("Playwright cerrado")
 
-    def fetch_page(self, url: str, **_kwargs) -> str:
+    @property
+    def page(self):
+        if self._page is None:
+            self.start()
+        return self._page
+
+    def fetch(
+        self,
+        url: str,
+        wait_selector: Optional[str] = None,
+        wait_ms: int = 2000,
+        entity_type: str = "page",
+        entity_name: str = "unknown",
+    ) -> str:
+        """Navego a la URL, espero a que cargue el contenido dinamico,
+        guardo en S3 y devuelvo el HTML.
+
+        Args:
+            url: URL a navegar.
+            wait_selector: selector CSS a esperar despues del goto.
+            wait_ms: milisegundos extra de espera para contenido lazy.
+            entity_type: tipo de entidad para el key de S3 (submolt, user, post).
+            entity_name: nombre o ID para el key de S3.
+        """
         self._limiter.wait()
         logger.info("GET %s", url)
-        r = self.session.get(url, timeout=self._timeout)
-        r.raise_for_status()
-        r.encoding = r.apparent_encoding or "utf-8"
-        return r.text
 
-    def _cache_filename(self, url: str) -> str:
-        parsed = urlparse(url)
-        safe = parsed.path.replace("/", "_").strip("_") or "index"
-        h = hashlib.md5(url.encode()).hexdigest()[:8]
-        return f"{safe}_{h}.html"
+        try:
+            self.page.goto(url, wait_until="domcontentloaded")
+        except Exception as exc:
+            logger.warning("Timeout en goto %s: %s -- reintento", url, exc)
+            try:
+                self.page.goto(url, wait_until="commit")
+            except Exception as exc2:
+                logger.error("Fallo definitivo en %s: %s", url, exc2)
+                raise
 
-    def fetch_with_cache(self, url: str, force_refresh: bool = False, **_kwargs) -> str:
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        fname = self._cache_filename(url)
-        path = self.cache_dir / fname
-        if not force_refresh and path.exists():
-            logger.debug("Cache hit: %s", fname)
-            return path.read_text(encoding="utf-8")
-        html = self.fetch_page(url)
-        path.write_text(html, encoding="utf-8")
+        if wait_selector:
+            try:
+                self.page.wait_for_selector(wait_selector, timeout=10000)
+            except Exception:
+                logger.debug("Selector '%s' no aparecio en %s", wait_selector, url)
+
+        self.page.wait_for_timeout(wait_ms)
+        html = self.page.content()
+
+        # Persisto en S3
+        if self._s3:
+            try:
+                self._s3.put(html, entity_type, entity_name)
+            except Exception as exc:
+                logger.warning("No pude guardar HTML en S3 para %s/%s: %s",
+                               entity_type, entity_name, exc)
+
         return html
 
-    def scroll_to_load_all(self, **_kwargs) -> None:
-        pass
+    def scroll_and_fetch(
+        self,
+        url: str,
+        max_scrolls: int = 5,
+        scroll_delay: int = 1500,
+        entity_type: str = "page",
+        entity_name: str = "unknown",
+    ) -> str:
+        """Navego, hago scroll para cargar mas contenido, y devuelvo el HTML completo."""
+        self._limiter.wait()
+        logger.info("GET+scroll %s", url)
+
+        self.page.goto(url, wait_until="domcontentloaded")
+        self.page.wait_for_timeout(2000)
+
+        for _ in range(max_scrolls):
+            self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            self.page.wait_for_timeout(scroll_delay)
+
+        html = self.page.content()
+
+        if self._s3:
+            try:
+                self._s3.put(html, entity_type, entity_name)
+            except Exception as exc:
+                logger.warning("No pude guardar HTML en S3: %s", exc)
+
+        return html
 
 
 # ===========================================================================
@@ -730,7 +880,7 @@ def _parse_post_element(el, submolt_name: Optional[str] = None) -> Dict[str, Any
     }
     href = el.get("href")
     if href:
-        result["post_url"] = f"https://www.moltbook.com{href}" if href.startswith("/") else href
+        result["post_url"] = f"{BASE_URL}{href}" if href.startswith("/") else href
     h3 = el.select_one("h3")
     if h3:
         result["title"] = h3.get_text(strip=True)
@@ -777,7 +927,7 @@ def parse_posts_from_page(
     return posts
 
 
-def parse_comments(html: str, post_id: str, max_comments: int = 10) -> List[Dict[str, Any]]:
+def parse_comments(html: str, post_id: str, max_comments: int = 100) -> List[Dict[str, Any]]:
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(html, "lxml")
     out: List[Dict[str, Any]] = []
@@ -808,46 +958,6 @@ def parse_comments(html: str, post_id: str, max_comments: int = 10) -> List[Dict
             if len(out) >= max_comments:
                 break
     return out
-
-
-# ===========================================================================
-# DISCOVERY
-# ===========================================================================
-
-BASE_URL = "https://www.moltbook.com"
-
-
-class URLDiscovery:
-    def __init__(self, fetcher: RequestsFetcher):
-        self.fetcher = fetcher
-
-    def discover_users(self, max_users: int = 100,
-                       known_users: Optional[Set[str]] = None) -> List[str]:
-        known = known_users or set()
-        html = self.fetcher.fetch_page(f"{BASE_URL}/u")
-        urls: List[str] = []
-        for u in parse_users_list(html):
-            if len(urls) >= max_users:
-                break
-            name = u.get("name", "")
-            if name and name not in known:
-                urls.append(f"{BASE_URL}/u/{name}")
-        logger.info("Descubri %d URLs de usuarios", len(urls))
-        return urls
-
-    def discover_submolts(self, max_submolts: int = 50,
-                          known_submolts: Optional[Set[str]] = None) -> List[str]:
-        known = known_submolts or set()
-        html = self.fetcher.fetch_page(f"{BASE_URL}/m")
-        urls: List[str] = []
-        for s in parse_submolt_list(html):
-            if len(urls) >= max_submolts:
-                break
-            name = s.get("name", "")
-            if name and name not in known:
-                urls.append(f"{BASE_URL}/m/{name}")
-        logger.info("Descubri %d URLs de submolts", len(urls))
-        return urls
 
 
 # ===========================================================================
@@ -889,7 +999,6 @@ class BatchWriter:
         return self._flush(entity_type)
 
     def flush_all(self) -> None:
-        """Flush en orden para no romper FKs."""
         for t in self._FLUSH_ORDER:
             if self._buf.get(t):
                 self._flush(t)
@@ -902,32 +1011,32 @@ class BatchWriter:
 class MoltbookScraper:
     """Orquesto extraccion, transformacion minima y carga.
 
-    Todo pasa por el BatchWriter que acumula y flushea respetando
-    el orden de dependencia de las tablas.
+    Playwright navega las paginas, guarda HTML en S3 y luego parseo
+    con BeautifulSoup. Todo pasa por el BatchWriter que flushea
+    respetando el orden de FK.
     """
 
-    def __init__(self, db: Database, batch_size: int = 1000):
+    def __init__(
+        self,
+        db: Database,
+        fetcher: PlaywrightFetcher,
+        batch_size: int = 1000,
+    ):
         self.db = db
-        self._fetcher: Optional[RequestsFetcher] = None
-        self._discovery: Optional[URLDiscovery] = None
+        self._fetcher = fetcher
         self._batch = BatchWriter(db, batch_size=batch_size)
-
-        # Registro local de user_submolt que ya meti en el batch,
-        # para no duplicar inserts dentro de la misma ejecucion
         self._user_submolt_seen: Set[tuple] = set()
 
     def __enter__(self) -> "MoltbookScraper":
         self.db.ensure_tables()
-        self._fetcher = RequestsFetcher(rate_limit=1.0, timeout=30)
-        self._discovery = URLDiscovery(self._fetcher)
+        self._fetcher.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         try:
             self._batch.flush_all()
         finally:
-            if self._fetcher:
-                self._fetcher.close()
+            self._fetcher.close()
 
     # -- helpers internos ---------------------------------------------------
 
@@ -942,14 +1051,73 @@ class MoltbookScraper:
         return new_user.id_user
 
     def _register_user_submolt(self, user_id: str, submolt_id: str) -> None:
-        """Registro la relacion user <-> submolt si aun no la tengo."""
         key = (user_id, submolt_id)
         if key in self._user_submolt_seen:
             return
         self._user_submolt_seen.add(key)
         self._batch.add(UserSubMolt(id_user=user_id, id_submolt=submolt_id))
 
-    # -- scraping -----------------------------------------------------------
+    # -- discovery ----------------------------------------------------------
+
+    def _discover_submolts(self, max_submolts: int) -> List[str]:
+        """Descubro submolts navegando /m con scroll, y complemento con la lista semilla."""
+        discovered: Set[str] = set()
+        try:
+            html = self._fetcher.scroll_and_fetch(
+                f"{BASE_URL}/m",
+                max_scrolls=5,
+                entity_type="listing",
+                entity_name="submolts",
+            )
+            for item in parse_submolt_list(html):
+                name = item.get("name", "")
+                if name:
+                    discovered.add(name)
+            logger.info("Descubri %d submolts desde /m", len(discovered))
+        except Exception as exc:
+            logger.warning("No pude navegar /m: %s -- uso solo semilla", exc)
+
+        # Complemento con la semilla
+        for name in SEED_SUBMOLTS:
+            discovered.add(name)
+
+        known = set(self.db.get_submolt_names())
+        new_names = [n for n in discovered if n not in known]
+        old_names = [n for n in discovered if n in known]
+        all_names = new_names + old_names
+        return all_names[:max_submolts]
+
+    def _discover_users(self, max_users: int) -> List[str]:
+        """Descubro usuarios desde /u con Playwright."""
+        discovered: List[str] = []
+        try:
+            html = self._fetcher.scroll_and_fetch(
+                f"{BASE_URL}/u",
+                max_scrolls=5,
+                entity_type="listing",
+                entity_name="users",
+            )
+            # Intento cambiar a la vista Karma si hay boton
+            try:
+                self._fetcher.page.click("button:has-text('Karma')", timeout=3000)
+                self._fetcher.page.wait_for_timeout(2000)
+                html = self._fetcher.page.content()
+            except Exception:
+                pass
+            for item in parse_users_list(html):
+                name = item.get("name", "")
+                if name:
+                    discovered.append(name)
+            logger.info("Descubri %d usuarios desde /u", len(discovered))
+        except Exception as exc:
+            logger.warning("No pude navegar /u: %s", exc)
+
+        known = set(self.db.get_user_names())
+        new_names = [n for n in discovered if n not in known]
+        old_names = [n for n in discovered if n in known]
+        return (new_names + old_names)[:max_users]
+
+    # -- pipeline principal -------------------------------------------------
 
     def scrape_all(
         self,
@@ -957,83 +1125,99 @@ class MoltbookScraper:
         max_submolts: int = 50,
         max_posts: int = 10,
         max_comments: int = 100,
-        force_refresh: bool = False,
     ) -> Dict[str, int]:
-        known_users = set(self.db.get_user_names())
-        known_submolts = set(self.db.get_submolt_names())
+        """Pipeline completo:
+        1. Scrapeo submolts (con posts y comentarios)
+        2. Enriquezco perfiles de usuarios descubiertos
+        """
+        # --- 1. Submolts ---
+        submolt_names = self._discover_submolts(max_submolts)
+        logger.info("Procesando %d submolts", len(submolt_names))
 
-        # --- Usuarios ---
-        user_urls = self._discovery.discover_users(
-            max_users=max_users,
-            known_users=known_users if not force_refresh else None,
-        )
-        users_scraped = 0
-        for url in user_urls:
+        submolts_ok = 0
+        for name in submolt_names:
             try:
-                username = url.rsplit("/u/", 1)[-1]
-                html = self._fetcher.fetch_with_cache(url, force_refresh=force_refresh)
-                data = parse_user_profile(html, username)
-                user = User.from_scraped_data(**data)
-                self._batch.add(user)
-                users_scraped += 1
-                logger.info("Usuario: %s (karma=%d)", user.name, user.karma)
-            except Exception as exc:
-                logger.error("Error scrapeando usuario %s: %s", url, exc)
+                url = f"{BASE_URL}/m/{name}"
+                html = self._fetcher.fetch(
+                    url,
+                    wait_selector="a[href^='/post/']",
+                    wait_ms=3000,
+                    entity_type="submolt",
+                    entity_name=name,
+                )
 
-        # Necesito que los usuarios existan antes de meter posts
-        self._batch.flush_type(User)
-
-        # --- Submolts (con posts y comments) ---
-        submolt_urls = self._discovery.discover_submolts(
-            max_submolts=max_submolts,
-            known_submolts=known_submolts if not force_refresh else None,
-        )
-        submolts_scraped = 0
-        for url in submolt_urls:
-            try:
-                name = url.rsplit("/m/", 1)[-1]
-                html = self._fetcher.fetch_with_cache(url, force_refresh=force_refresh)
                 sm_data = parse_submolt_page(html, name)
                 submolt = SubMolt.from_scraped_data(**sm_data)
                 self._batch.add(submolt)
-                submolts_scraped += 1
-                logger.info("Submolt: %s", submolt.name)
-
-                # Flush submolts y users antes de los posts (FK)
                 self._batch.flush_type(SubMolt)
                 self._batch.flush_type(User)
+                submolts_ok += 1
 
-                self._scrape_posts(html, submolt, max_posts, max_comments)
+                logger.info("Submolt: %s", submolt.name)
+                self._process_posts(html, submolt, max_posts, max_comments)
+
             except Exception as exc:
-                logger.error("Error scrapeando submolt %s: %s", url, exc)
+                logger.error("Error en submolt %s: %s", name, exc)
 
-        # Flush final de todo lo que quede pendiente
+        self._batch.flush_all()
+
+        # --- 2. Usuarios ---
+        user_names = self._discover_users(max_users)
+        # Tambien agrego usuarios que descubri de posts/comentarios
+        db_users = self.db.get_user_names()
+        all_user_names = list(dict.fromkeys(user_names + db_users))
+        users_enriched = self._enrich_user_profiles(all_user_names[:max_users])
+
         self._batch.flush_all()
 
         return {
-            "users": users_scraped,
-            "submolts": submolts_scraped,
+            "users": self.db.count(User),
+            "users_enriched": users_enriched,
+            "submolts": submolts_ok,
             "posts": self.db.count(Post),
             "comments": self.db.count(Comment),
             "user_submolt": self.db.count(UserSubMolt),
         }
 
-    def _scrape_posts(self, html: str, submolt: SubMolt,
-                      max_posts: int, max_comments: int) -> None:
-        posts_data = parse_posts_from_page(html, submolt.name, max_posts=max_posts)
+    def _enrich_user_profiles(self, user_names: List[str]) -> int:
+        """Visito /u/{name} para obtener karma, bio, etc."""
+        logger.info("Enriqueciendo %d perfiles de usuario", len(user_names))
+        enriched = 0
+        for name in user_names:
+            try:
+                url = f"{BASE_URL}/u/{name}"
+                html = self._fetcher.fetch(
+                    url,
+                    wait_selector="h1, h2",
+                    wait_ms=2000,
+                    entity_type="user",
+                    entity_name=name,
+                )
+                data = parse_user_profile(html, name)
+                user = User.from_scraped_data(**data)
+                self._batch.add(user)
+                enriched += 1
+                if data.get("karma", 0) > 0:
+                    logger.info("Enriquecido: %s (karma=%d)", name, data.get("karma", 0))
+            except Exception as exc:
+                logger.warning("No pude enriquecer perfil %s: %s", name, exc)
+
+        self._batch.flush_type(User)
+        return enriched
+
+    def _process_posts(self, submolt_html: str, submolt: SubMolt,
+                       max_posts: int, max_comments: int) -> None:
+        posts_data = parse_posts_from_page(submolt_html, submolt.name, max_posts=max_posts)
 
         for pd in posts_data:
             author_name = pd.get("author_name")
             if not author_name:
                 continue
 
-            # Necesito flushear usuarios antes de resolver IDs
             self._batch.flush_type(User)
-
             user_id = self._resolve_user_id(author_name)
             self._batch.flush_type(User)
 
-            # Relacion user_submolt
             self._register_user_submolt(user_id, submolt.id_submolt)
             self._batch.flush_type(UserSubMolt)
 
@@ -1052,18 +1236,25 @@ class MoltbookScraper:
             self._batch.add(post)
             self._batch.flush_type(Post)
 
-            # Comentarios del post
+            # Navego al post para extraer comentarios
             if post_url:
                 try:
-                    post_html = self._fetcher.fetch_with_cache(
-                        post_url, force_refresh=True,
+                    post_name = post_url.rsplit("/", 1)[-1]
+                    post_html = self._fetcher.fetch(
+                        post_url,
+                        wait_selector="div.mt-6",
+                        wait_ms=2500,
+                        entity_type="post",
+                        entity_name=post_name,
                     )
-                    self._scrape_comments(post_html, post.id_post, submolt.id_submolt, max_comments)
+                    self._process_comments(
+                        post_html, post.id_post, submolt.id_submolt, max_comments
+                    )
                 except Exception as exc:
                     logger.error("Error en comentarios de %s: %s", post_url, exc)
 
-    def _scrape_comments(self, html: str, post_id: str,
-                         submolt_id: str, max_comments: int) -> None:
+    def _process_comments(self, html: str, post_id: str,
+                          submolt_id: str, max_comments: int) -> None:
         comments_data = parse_comments(html, post_id, max_comments=max_comments)
 
         for cd in comments_data:
@@ -1075,7 +1266,6 @@ class MoltbookScraper:
             user_id = self._resolve_user_id(author_name)
             self._batch.flush_type(User)
 
-            # El comentarista tambien pertenece al submolt
             self._register_user_submolt(user_id, submolt_id)
             self._batch.flush_type(UserSubMolt)
 
@@ -1098,21 +1288,30 @@ class MoltbookScraper:
 def main() -> None:
     params = _resolve_job_params()
 
-    db_host = params.get("DB_HOST", "")
+    db_host = params.get("DB_HOST", "moltbook.ce3qywi6qo2c.us-east-1.rds.amazonaws.com")
     db_port = int(params.get("DB_PORT", "5432"))
-    db_name = params.get("DB_NAME", "")
-    db_user = params.get("DB_USER", "")
-    db_password = params.get("DB_PASSWORD", "")
-    batch_size = int(params.get("BATCH_SIZE", "5000"))
-    max_users = int(params.get("MAX_USERS", "100"))
+    db_name = params.get("DB_NAME", "postgres")
+    db_user = params.get("DB_USER", "postgres")
+    db_password = params.get("DB_PASSWORD", "Cl6rS2FxuKTkp2lQ")
+    batch_size = int(params.get("BATCH_SIZE", "50"))
+    max_users = int(params.get("MAX_USERS", "10"))
+    s3_bucket = params.get("S3_HTML_BUCKET", "")
 
     if not db_host or not db_name:
         logger.error("Faltan parametros obligatorios: DB_HOST y DB_NAME.")
         sys.exit(1)
 
+    # S3 es opcional en local, pero obligatorio en Glue
+    s3_store: Optional[S3HTMLStore] = None
+    if s3_bucket:
+        s3_store = S3HTMLStore(bucket=s3_bucket)
+        logger.info("HTML se guardara en s3://%s/html/", s3_bucket)
+    else:
+        logger.warning("S3_HTML_BUCKET no definido -- el HTML no se persistira en S3")
+
     logger.info(
-        "Inicio ETL -- host=%s port=%d db=%s max_users=%d batch_size=%d",
-        db_host, db_port, db_name, max_users, batch_size,
+        "Inicio ETL -- host=%s db=%s max_users=%d batch_size=%d",
+        db_host, db_name, max_users, batch_size,
     )
 
     db = Database(
@@ -1124,14 +1323,20 @@ def main() -> None:
         chunk_size=batch_size,
     )
 
+    fetcher = PlaywrightFetcher(
+        s3_store=s3_store,
+        rate_limit=1.0,
+        timeout=30,
+        headless=True,
+    )
+
     try:
-        with MoltbookScraper(db=db, batch_size=batch_size) as scraper:
+        with MoltbookScraper(db=db, fetcher=fetcher, batch_size=batch_size) as scraper:
             result = scraper.scrape_all(
                 max_users=max_users,
                 max_submolts=50,
                 max_posts=10,
                 max_comments=100,
-                force_refresh=False,
             )
         logger.info("ETL terminado: %s", result)
     except Exception as exc:
