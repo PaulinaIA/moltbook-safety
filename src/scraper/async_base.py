@@ -215,9 +215,6 @@ class AsyncBaseScraper:
         Returns:
             List of (url, html) tuples. Failed URLs return (url, None).
         """
-        results = []
-        worker_index = 0
-
         async def _fetch_one(url: str, worker: PageWorker):
             async with self._semaphore:
                 try:
@@ -227,17 +224,12 @@ class AsyncBaseScraper:
                     logger.error("Failed to fetch %s: %s", url, e)
                     return (url, None)
 
-        # Process in batches the size of our worker pool
-        batch_size = self.max_workers
-        for i in range(0, len(urls), batch_size):
-            batch = urls[i:i + batch_size]
-            tasks = []
-            for j, url in enumerate(batch):
-                worker = self._workers[j % len(self._workers)]
-                tasks.append(_fetch_one(url, worker))
-
-            batch_results = await asyncio.gather(*tasks)
-            results.extend(batch_results)
-            logger.info("Fetched batch %d-%d / %d", i, min(i + batch_size, len(urls)), len(urls))
-
-        return results
+        # Launch all tasks — semaphore controls concurrency
+        tasks = [
+            _fetch_one(url, self._workers[i % len(self._workers)])
+            for i, url in enumerate(urls)
+        ]
+        logger.info("Fetching %d URLs with %d workers...", len(urls), self.max_workers)
+        results = await asyncio.gather(*tasks)
+        logger.info("Fetched all %d URLs", len(urls))
+        return list(results)

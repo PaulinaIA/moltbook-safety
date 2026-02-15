@@ -228,38 +228,35 @@ class AsyncMoltbookScraper:
         submolts = []
         all_post_urls = []
 
-        # Process submolts in parallel batches (with scroll)
+        # Process all submolts in parallel — semaphore controls concurrency
         sem = asyncio.Semaphore(self.max_workers)
 
         async def _process_submolt(url):
             async with sem:
                 return (url, await self._fetch_submolt_with_scroll(url))
 
-        batch_size = self.max_workers
-        for i in range(0, len(submolt_urls), batch_size):
-            batch = submolt_urls[i:i + batch_size]
-            tasks = [_process_submolt(url) for url in batch]
-            results = await asyncio.gather(*tasks)
+        tasks = [_process_submolt(url) for url in submolt_urls]
+        logger.info("Fetching %d submolts with scroll...", len(submolt_urls))
+        results = await asyncio.gather(*tasks)
 
-            for url, html in results:
-                if html is None:
-                    continue
-                try:
-                    name = url.split("/m/")[-1]
-                    submolt_data = parse_submolt_page(html, name)
-                    submolt = SubMolt.from_scraped_data(**submolt_data)
-                    submolts.append(submolt)
+        for url, html in results:
+            if html is None:
+                continue
+            try:
+                name = url.split("/m/")[-1]
+                submolt_data = parse_submolt_page(html, name)
+                submolt = SubMolt.from_scraped_data(**submolt_data)
+                submolts.append(submolt)
 
-                    posts_data = parse_posts_from_page(html, name, max_posts=max_posts_per_submolt)
-                    for post_data in posts_data:
-                        post_url = post_data.get("post_url")
-                        if post_url:
-                            all_post_urls.append((post_url, submolt.id_submolt, name, post_data))
-                except Exception as e:
-                    logger.error("Failed to parse submolt from %s: %s", url, e)
+                posts_data = parse_posts_from_page(html, name, max_posts=max_posts_per_submolt)
+                for post_data in posts_data:
+                    post_url = post_data.get("post_url")
+                    if post_url:
+                        all_post_urls.append((post_url, submolt.id_submolt, name, post_data))
+            except Exception as e:
+                logger.error("Failed to parse submolt from %s: %s", url, e)
 
-            logger.info("Processed submolts %d-%d / %d | Posts found so far: %d",
-                        i, min(i + batch_size, len(submolt_urls)), len(submolt_urls), len(all_post_urls))
+        logger.info("Processed %d submolts | Total posts found: %d", len(submolt_urls), len(all_post_urls))
 
         # Save submolts
         if submolts:
@@ -322,15 +319,21 @@ class AsyncMoltbookScraper:
                 self.db_ops.upsert_many(chunk)
             logger.info("Saved %d posts", len(posts))
 
-        # Scrape profiles of new authors to fill in karma, description, etc.
+        # Scrape author profiles + comments in parallel
+        parallel_tasks = []
         if new_users:
             new_user_urls = [f"{self.base_url}/u/{u.name}" for u in new_users if u.name]
-            logger.info("Scraping %d new author profiles to fill user data...", len(new_user_urls))
-            await self.scrape_users_parallel(new_user_urls)
+            logger.info("Scraping %d new author profiles + comments in parallel...", len(new_user_urls))
+            parallel_tasks.append(self.scrape_users_parallel(new_user_urls))
 
-        # Scrape comments from individual post pages in parallel
         if post_urls_for_comments:
-            await self._scrape_comments_parallel(post_urls_for_comments, max_comments_per_post)
+            parallel_tasks.append(self._scrape_comments_parallel(
+                post_urls_for_comments, max_comments_per_post,
+                known_user_names=known_user_names, known_user_ids=known_user_ids,
+            ))
+
+        if parallel_tasks:
+            await asyncio.gather(*parallel_tasks)
 
         return {
             "submolts": len(submolts),
@@ -341,6 +344,8 @@ class AsyncMoltbookScraper:
         self,
         post_url_pairs: List[tuple],  # (url, post_id)
         max_comments: int = 100,
+        known_user_names: dict = None,
+        known_user_ids: dict = None,
     ) -> List[Comment]:
         """Scrape comments from post pages in parallel."""
         urls = [pair[0] for pair in post_url_pairs]
@@ -349,11 +354,12 @@ class AsyncMoltbookScraper:
         logger.info("Scraping comments from %d post pages in parallel...", len(urls))
         results = await self.scraper.fetch_many(urls, wait_selector="div.mt-6")
 
-        # Pre-load all known users into memory (avoid individual DB queries)
-        logger.info("Loading known users into memory for comments...")
-        known_user_names = {name.lower()[:12]: name for name in self.db_ops.get_user_names()}
-        known_user_ids = {name: uid for uid, name in zip(self.db_ops.get_user_ids(), self.db_ops.get_user_names())}
-        logger.info("Loaded %d known users for comment resolution", len(known_user_names))
+        # Use passed cache or load from DB
+        if known_user_names is None or known_user_ids is None:
+            logger.info("Loading known users into memory for comments...")
+            known_user_names = {name.lower()[:12]: name for name in self.db_ops.get_user_names()}
+            known_user_ids = {name: uid for uid, name in zip(self.db_ops.get_user_ids(), self.db_ops.get_user_names())}
+            logger.info("Loaded %d known users for comment resolution", len(known_user_names))
 
         all_comments = []
         new_users = []
@@ -443,14 +449,19 @@ class AsyncMoltbookScraper:
         logger.info("Workers: %d | Rate limit: %.1fs", self.max_workers, self.rate_limit)
         logger.info("=" * 60)
 
-        # Phase 1: Discover and scrape users
-        logger.info("--- Phase 1: Users ---")
-        user_urls = await self.discover_all_users(max_users=max_users, max_scrolls=max_scrolls_users)
+        # Phase 1: Discover users + submolts in parallel
+        logger.info("--- Phase 1: Discovery (parallel) ---")
+        user_urls, submolt_urls = await asyncio.gather(
+            self.discover_all_users(max_users=max_users, max_scrolls=max_scrolls_users),
+            self.discover_all_submolts(max_submolts=max_submolts, max_scrolls=max_scrolls_submolts),
+        )
+
+        # Phase 2: Scrape user profiles
+        logger.info("--- Phase 2: User Profiles ---")
         users = await self.scrape_users_parallel(user_urls)
 
-        # Phase 2: Discover and scrape submolts + posts + comments
-        logger.info("--- Phase 2: Submolts + Posts + Comments ---")
-        submolt_urls = await self.discover_all_submolts(max_submolts=max_submolts, max_scrolls=max_scrolls_submolts)
+        # Phase 3: Scrape submolts + posts + comments
+        logger.info("--- Phase 3: Submolts + Posts + Comments ---")
         submolt_results = await self.scrape_submolts_parallel(
             submolt_urls,
             max_posts_per_submolt=max_posts_per_submolt,

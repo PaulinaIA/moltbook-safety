@@ -102,7 +102,7 @@ class DatabaseOperations:
                 return False
 
     def upsert_many(self, entities: List[T]) -> int:
-        """Upsert multiple entities in a batch."""
+        """Upsert multiple entities in a batch. Uses true batch operations first, falls back to row-by-row."""
         if not entities:
             return 0
 
@@ -114,22 +114,41 @@ class DatabaseOperations:
         data_list = [e.to_dict() for e in entities]
         columns = list(data_list[0].keys())
         sql = self._build_upsert_sql(entity_type, columns)
+        values_list = [list(data.values()) for data in data_list]
 
-        success_count = 0
         with get_connection(self.db_path) as conn:
             cursor = conn.cursor()
-            for i, data in enumerate(data_list):
+
+            # Try true batch first
+            try:
+                if self._is_postgres:
+                    import psycopg2.extras
+                    psycopg2.extras.execute_batch(cursor, sql, values_list, page_size=1000)
+                else:
+                    cursor.executemany(sql, values_list)
+                logger.info("Batch upserted %d %s records", len(entities), table)
+                return len(entities)
+            except Exception as e:
+                logger.warning("Batch upsert failed, falling back to row-by-row: %s", e)
+                if self._is_postgres:
+                    cursor.execute("ROLLBACK")
+                    conn.commit()
+
+            # Fallback: row-by-row with savepoints
+            success_count = 0
+            cursor = conn.cursor()
+            for i, values in enumerate(values_list):
                 try:
                     if self._is_postgres:
                         cursor.execute(f"SAVEPOINT sp_{i}")
-                    cursor.execute(sql, list(data.values()))
+                    cursor.execute(sql, values)
                     success_count += 1
                 except Exception as e:
                     if self._is_postgres:
                         cursor.execute(f"ROLLBACK TO SAVEPOINT sp_{i}")
                     logger.warning("Upsert failed for row: %s", e)
 
-        logger.info("Upserted %d/%d %s records", success_count, len(entities), table)
+        logger.info("Upserted %d/%d %s records (row-by-row)", success_count, len(entities), table)
         return success_count
 
     def get_by_id(
