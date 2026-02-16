@@ -174,29 +174,39 @@ def spark_evaluate_predictions(
     total = pred_df.count()
     results["total_predictions"] = total
 
-    # Rename for evaluator compatibility
-    eval_df = (
+    # PRIMARY: Evaluate on log scale (consistent with H2O training target)
+    log_eval_df = (
+        pred_df
+        .withColumn("label", F.log1p(F.col("karma").cast("double")))
+        .withColumn("prediction", F.log1p(F.col("karma_predicted")))
+    )
+
+    evaluators = {
+        "mae": RegressionEvaluator(metricName="mae"),
+        "rmse": RegressionEvaluator(metricName="rmse"),
+        "r2": RegressionEvaluator(metricName="r2"),
+    }
+
+    for metric_name, evaluator in evaluators.items():
+        value = evaluator.evaluate(log_eval_df)
+        results[metric_name] = round(value, 4)
+        logger.info("PySpark (log scale) %s: %.4f", metric_name, value)
+
+    # SECONDARY: Evaluate on original karma scale (informational)
+    karma_eval_df = (
         pred_df
         .withColumnRenamed("karma", "label")
         .withColumnRenamed("karma_predicted", "prediction")
     )
 
-    # --- Regression metrics ---
-    evaluators = {
-        "mae": RegressionEvaluator(metricName="mae"),
-        "rmse": RegressionEvaluator(metricName="rmse"),
-        "r2": RegressionEvaluator(metricName="r2"),
-        "mse": RegressionEvaluator(metricName="mse"),
-    }
-
     for metric_name, evaluator in evaluators.items():
-        value = evaluator.evaluate(eval_df)
-        results[metric_name] = round(value, 4)
-        logger.info("PySpark %s: %.4f", metric_name, value)
+        value = evaluator.evaluate(karma_eval_df)
+        results[f"karma_{metric_name}"] = round(value, 4)
+        logger.info("PySpark (karma scale) %s: %.4f", metric_name, value)
 
-    # --- Residual analysis ---
+    # --- Residual analysis (log scale) ---
     residuals_df = (
-        eval_df
+        log_eval_df
         .withColumn("residual", F.col("label") - F.col("prediction"))
         .withColumn("abs_residual", F.abs(F.col("residual")))
     )
@@ -211,9 +221,9 @@ def spark_evaluate_predictions(
 
     results["residual_stats"] = residual_stats.to_dict(orient="records")[0]
 
-    # --- Prediction vs actual by quartiles ---
+    # --- Prediction vs actual by quartiles (original karma scale) ---
     quartile_analysis = (
-        eval_df
+        karma_eval_df
         .withColumn(
             "karma_quartile",
             F.when(F.col("label") == 0, "Q0 (zero)")
