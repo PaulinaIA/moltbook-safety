@@ -464,6 +464,31 @@ class Database:
             cur.execute(f"SELECT COUNT(*) FROM {table}")
             return cur.fetchone()[0]
 
+    def get_submolt_id_by_name(self, name: str) -> Optional[str]:
+        """devuelvo el id del submolt si ya existe en la db."""
+        with _pg_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT id_submolt FROM sub_molt WHERE name = %s LIMIT 1", (name,))
+            row = cur.fetchone()
+            return row[0] if row else None
+
+    def post_exists(self, post_id: str) -> bool:
+        """devuelvo true si el post ya existe en la db."""
+        with _pg_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM posts WHERE id_post = %s LIMIT 1", (post_id,))
+            return cur.fetchone() is not None
+
+    def user_is_enriched(self, name: str) -> bool:
+        """devuelvo true si el usuario ya tiene karma o descripcion en la db."""
+        with _pg_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM users WHERE name = %s AND (karma > 0 OR description IS NOT NULL) LIMIT 1",
+                (name,),
+            )
+            return cur.fetchone() is not None
+
 
 # ---------------------------------------------------------------------------
 # FETCHER CON REQUESTS (sin Playwright)
@@ -905,6 +930,11 @@ class MoltbookScraper:
         self._batch = BatchWriter(db, batch_size=batch_size)
         self._user_submolt_seen: Set[tuple] = set()
         self._enriched_users: Set[str] = set()
+        # contadores de entidades nuevas (no cuentan existentes)
+        self._new_users = 0
+        self._new_posts = 0
+        self._new_comments = 0
+        self._new_enriched = 0
 
     def __enter__(self) -> "MoltbookScraper":
         self.db.ensure_tables()
@@ -928,6 +958,7 @@ class MoltbookScraper:
             return uid
         new_user = User.from_scraped_data(name=author_name)
         self._batch.add(new_user)
+        self._new_users += 1
         return new_user.id_user
 
     def _register_user_submolt(self, user_id: str, submolt_id: str) -> None:
@@ -966,10 +997,10 @@ class MoltbookScraper:
 
     def scrape_all(
         self,
-        max_users: int = 100,
-        max_submolts: int = 50,
-        max_posts: int = 10,
-        max_comments: int = 100,
+        max_users,
+        max_submolts,
+        max_posts,
+        max_comments,
     ) -> Dict[str, int]:
         """pipeline completo. enriquezco usuarios de forma incremental
         despues de cada submolt para que si interrumpen el etl,
@@ -982,18 +1013,47 @@ class MoltbookScraper:
         submolts_ok = 0
         for name in submolt_names:
             try:
-                url = f"{BASE_URL}/m/{name}"
-                html = self._fetcher.fetch_with_cache(url)
+                # reviso si el submolt ya existe en la db
+                existing_sm_id = self.db.get_submolt_id_by_name(name)
 
-                sm_data = parse_submolt_page(html, name)
-                submolt = SubMolt.from_scraped_data(**sm_data)
-                self._batch.add(submolt)
-                self._batch.flush_type(SubMolt)
-                self._batch.flush_type(User)
-                submolts_ok += 1
+                # uso el api /api/v1/submolts/{name} que devuelve info + posts
+                api_url = f"{BASE_URL}/api/v1/submolts/{urllib.parse.quote(name)}"
+                logger.info("consultando api submolt: %s", api_url)
+                self._fetcher._limiter.wait()
+                resp = self._fetcher.session.get(api_url, timeout=20)
+                if resp.status_code != 200:
+                    logger.warning("api submolt %s respondio %d", name, resp.status_code)
+                    continue
 
-                logger.info("submolt: %s", submolt.name)
-                new_authors = self._process_posts(html, submolt, max_posts, max_comments)
+                payload = resp.json()
+                if not payload.get("success"):
+                    logger.warning("api submolt %s: success=false", name)
+                    continue
+
+                sm_info = payload.get("submolt") or {}
+                description = sm_info.get("description")
+                submolt = SubMolt.from_scraped_data(name=name, description=description)
+
+                if existing_sm_id:
+                    # el submolt ya existe, no lo re-inserto pero sigo
+                    # procesando posts para descubrir nuevos posts/usuarios/comentarios
+                    logger.info("submolt %s ya existe (id=%s), busco posts nuevos", name, existing_sm_id)
+                else:
+                    self._batch.add(submolt)
+                    self._batch.flush_type(SubMolt)
+                    self._batch.flush_type(User)
+                    submolts_ok += 1
+                    logger.info("submolt nuevo: %s", submolt.name)
+
+                # los posts vienen en el payload del api
+                api_posts = payload.get("posts") or []
+                new_authors = self._process_posts_from_api(
+                    api_posts, submolt, max_posts, max_comments,
+                )
+                logger.info(
+                    "en m/%s descubri %d autores, %d posts en api",
+                    name, len(new_authors), len(api_posts),
+                )
 
                 # enriquezco inmediatamente los usuarios descubiertos en este submolt
                 pending = [n for n in new_authors if n not in self._enriched_users]
@@ -1022,11 +1082,15 @@ class MoltbookScraper:
         self._batch.flush_all()
 
         return {
-            "users": self.db.count(User),
-            "users_enriched": len(self._enriched_users),
-            "submolts": submolts_ok,
-            "posts": self.db.count(Post),
-            "comments": self.db.count(Comment),
+            "new_submolts": submolts_ok,
+            "new_users": self._new_users,
+            "new_posts": self._new_posts,
+            "new_comments": self._new_comments,
+            "new_enriched": self._new_enriched,
+            "total_users": self.db.count(User),
+            "total_submolts": self.db.count(SubMolt),
+            "total_posts": self.db.count(Post),
+            "total_comments": self.db.count(Comment),
         }
 
     def _enrich_user_profiles(self, user_names: List[str]) -> int:
@@ -1040,6 +1104,11 @@ class MoltbookScraper:
         logger.info("enriqueciendo %d perfiles de usuario via api...", len(user_names))
         for name in user_names:
             if name in self._enriched_users:
+                continue
+            # si el usuario ya tiene karma o descripcion en la db, no llamo al api
+            if self.db.user_is_enriched(name):
+                self._enriched_users.add(name)
+                logger.info("usuario %s ya enriquecido en db, skip api", name)
                 continue
             try:
                 api_url = f"{BASE_URL}/api/v1/agents/profile?name={urllib.parse.quote(name)}"
@@ -1080,6 +1149,7 @@ class MoltbookScraper:
                 self._batch.flush_type(User)
                 self._enriched_users.add(name)
                 enriched += 1
+                self._new_enriched += 1
                 logger.info(
                     "enriquecido: %s (karma=%d, followers=%d, joined=%s, "
                     "owner=%s, desc=%s)",
@@ -1093,14 +1163,17 @@ class MoltbookScraper:
         logger.info("enrichment terminado: %d perfiles enriquecidos", enriched)
         return enriched
 
-    def _process_posts(self, submolt_html: str, submolt: SubMolt,
-                       max_posts: int, max_comments: int) -> List[str]:
-        """proceso posts de un submolt. devuelvo la lista de autores descubiertos."""
+    def _process_posts_from_api(
+        self, api_posts: List[Dict[str, Any]], submolt: SubMolt,
+        max_posts: int, max_comments: int,
+    ) -> List[str]:
+        """proceso posts desde el json del api /api/v1/submolts/{name}.
+        devuelvo la lista de autores descubiertos."""
         discovered_authors: Set[str] = set()
-        posts_data = parse_posts_from_page(submolt_html, submolt.name, max_posts=max_posts)
 
-        for pd in posts_data:
-            author_name = pd.get("author_name")
+        for pd in api_posts[:max_posts]:
+            author_info = pd.get("author") or {}
+            author_name = author_info.get("name")
             if not author_name:
                 continue
             discovered_authors.add(author_name)
@@ -1112,43 +1185,76 @@ class MoltbookScraper:
             self._register_user_submolt(user_id, submolt.id_submolt)
             self._batch.flush_type(UserSubMolt)
 
-            post_url = pd.get("post_url") or ""
-            pid = post_url.rsplit("/", 1)[-1] if post_url else None
+            pid = pd.get("id")
+
+            # si el post ya existe en la db, no re-inserto ni re-proceso comentarios
+            if pid and self.db.post_exists(pid):
+                logger.info("post %s ya existe en db, skip", pid)
+                continue
+
+            # rating = upvotes - downvotes
+            rating = (pd.get("upvotes") or 0) - (pd.get("downvotes") or 0)
+            created = (pd.get("created_at") or "")[:10] or None
+
             post = Post.from_scraped_data(
                 id_user=user_id,
-                id=pid or None,
+                id=pid,
                 title=pd.get("title"),
-                description=pd.get("description"),
+                description=pd.get("content"),
                 id_submolt=submolt.id_submolt,
-                rating=pd.get("rating", 0),
-                date=pd.get("date"),
-                url=post_url or None,
+                rating=rating,
+                date=created,
+                url=pd.get("url"),
             )
             self._batch.add(post)
             self._batch.flush_type(Post)
+            self._new_posts += 1
 
-            # navego al post para extraer comentarios
-            if post_url:
+            # obtengo comentarios del api /api/v1/posts/{id}
+            if pid:
                 try:
-                    post_html = self._fetcher.fetch_with_cache(post_url, force_refresh=True)
-                    self._process_comments(
-                        post_html, post.id_post, submolt.id_submolt, max_comments,
+                    self._process_comments_from_api(
+                        pid, submolt.id_submolt, max_comments,
                         discovered_authors=discovered_authors,
                     )
                 except Exception as exc:
-                    logger.error("error en comentarios de %s: %s", post_url, exc)
+                    logger.error("error en comentarios de post %s: %s", pid, exc)
 
         return list(discovered_authors)
 
-    def _process_comments(self, html: str, post_id: str,
-                          submolt_id: str, max_comments: int,
-                          discovered_authors: Optional[Set[str]] = None) -> None:
+    def _process_comments_from_api(
+        self, post_id: str, submolt_id: str, max_comments: int,
+        discovered_authors: Optional[Set[str]] = None,
+    ) -> None:
+        """obtengo comentarios via api /api/v1/posts/{id} y los proceso."""
         if discovered_authors is None:
             discovered_authors = set()
-        comments_data = parse_comments(html, post_id, max_comments=max_comments)
 
-        for cd in comments_data:
-            author_name = cd.get("author_name")
+        api_url = f"{BASE_URL}/api/v1/posts/{urllib.parse.quote(post_id)}"
+        self._fetcher._limiter.wait()
+        resp = self._fetcher.session.get(api_url, timeout=20)
+        if resp.status_code != 200:
+            logger.warning("api post %s respondio %d", post_id, resp.status_code)
+            return
+
+        payload = resp.json()
+        comments_list = payload.get("comments") or []
+
+        def _collect_comments(items: list, depth: int = 0) -> list:
+            """aplano comentarios y sus replies recursivamente."""
+            flat = []
+            for item in items:
+                flat.append(item)
+                replies = item.get("replies") or []
+                if replies:
+                    flat.extend(_collect_comments(replies, depth + 1))
+            return flat
+
+        all_comments = _collect_comments(comments_list)[:max_comments]
+
+        for cd in all_comments:
+            author_info = cd.get("author") or {}
+            author_name = author_info.get("name")
             if not author_name:
                 continue
 
@@ -1160,14 +1266,18 @@ class MoltbookScraper:
             self._register_user_submolt(user_id, submolt_id)
             self._batch.flush_type(UserSubMolt)
 
+            rating = (cd.get("upvotes") or 0) - (cd.get("downvotes") or 0)
+            created = (cd.get("created_at") or "")[:10] or None
+
             comment = Comment.from_scraped_data(
                 id_user=user_id,
                 id_post=post_id,
-                description=cd.get("description"),
-                date=cd.get("date"),
-                rating=cd.get("rating", 0),
+                description=cd.get("content"),
+                date=created,
+                rating=rating,
             )
             self._batch.add(comment)
+            self._new_comments += 1
 
         self._batch.flush_type(Comment)
 
