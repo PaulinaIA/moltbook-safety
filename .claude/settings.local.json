@@ -5,7 +5,10 @@
       "Bash(sqlite3:*)",
       "Bash(python:*)",
       "Bash(python3:*)",
-      "Bash(\"/c/Users/Paulina Peralta/anaconda3/python.exe\" -c \"import psycopg2; print\\(''psycopg2 already installed:'', psycopg2.__version__\\)\")"
+      "Bash(\"/c/Users/Paulina Peralta/anaconda3/python.exe\" -c \"import psycopg2; print\\(''psycopg2 already installed:'', psycopg2.__version__\\)\")",
+      "Bash(/c/Users/\"Paulina Peralta\"/AppData/Local/Microsoft/WindowsApps/python3:*)",
+      "Bash(conda info:*)",
+      "Bash(where:*)"
     ]
   }
 }

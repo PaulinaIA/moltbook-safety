@@ -1509,6 +1509,125 @@ Las correlaciones encontradas en el EDA con PySpark confirman que \texttt{karma}
 
 % ============================================================
 \clearpage
+\section{Arquitectura en AWS}
+
+Para llevar el pipeline a la nube se dise\~n\'o una arquitectura en AWS que replica y escala el flujo de desarrollo local. Se utilizaron estrat\'egicamente los siguientes servicios:
+
+\begin{itemize}
+    \item \textbf{S3:} para almacenar el m\'odulo del proyecto empaquetado en un \texttt{.zip}, que luego se importa tanto en el ETL como en el notebook de modelado.
+    \item \textbf{RDS con PostgreSQL:} para migrar la base de datos de SQLite (fase de desarrollo) a un motor relacional de producci\'on.
+    \item \textbf{AWS Glue Job:} para ejecutar el ETL de scraping. Dado que Playwright necesita acceso a Chrome y Glue no lo soporta, se migr\'o la extracci\'on a las APIs REST de moltbook.
+    \item \textbf{CloudWatch:} para monitorear los logs del Glue Job, hacer debugging y optimizar el script. Adem\'as se agreg\'o un reporte de ejecuci\'on al final del proceso.
+    \item \textbf{SageMaker:} para la fase de modelado con Jupyter notebooks, reutilizando el m\'odulo de S3.
+\end{itemize}
+
+\subsection{S3 -- Almacenamiento del M\'odulo}
+
+Se us\'o S3 para encapsular el proyecto modular en un archivo \texttt{.zip} y subirlo al bucket \texttt{moltbook/library}. Este archivo funciona como librer\'ia compartida: tanto el Glue Job como el notebook de SageMaker lo importan din\'amicamente para reutilizar las clases de \texttt{src.database} y la l\'ogica de entrenamiento sin duplicar c\'odigo (principio DRY).
+
+\subsection{ETL en AWS Glue Job}
+
+\subsubsection{Cambio de Estrategia de Extracci\'on}
+
+Para solucionar el problema de que moltbook.com es una SPA y Playwright necesita acceso a Chrome (no disponible en Glue), se migraron las extracciones a las APIs REST de moltbook:
+
+\begin{itemize}
+    \item \texttt{/api/v1/submolts} -- descubrimiento de submolts.
+    \item \texttt{/api/v1/posts} -- obtenci\'on de posts por submolt.
+    \item \texttt{/api/v1/agents/profile} -- enriquecimiento de perfiles de usuario.
+\end{itemize}
+
+\subsubsection{Flujo del ETL}
+
+El proceso se ejecuta en las siguientes fases:
+
+\begin{enumerate}
+    \item \textbf{Fase 0 -- Inicializaci\'on:} conexi\'on a PostgreSQL (RDS), creaci\'on idempotente de tablas e inicializaci\'on del fetcher HTTP con rate limiter (1 req/s).
+
+    \item \textbf{Fase 1 -- Descubrimiento de submolts:} fetch de \texttt{/m} para descubrir submolts din\'amicamente, complementado con una lista semilla de 65 submolts conocidos. Se priorizan los nuevos (no existentes en DB).
+
+    \item \textbf{Fase 2 -- Loop por cada submolt:}
+    \begin{itemize}
+        \item GET \texttt{/api/v1/submolts/\{name\}} para obtener info del submolt y su lista de posts.
+        \item Por cada post: se resuelve/crea el usuario autor, se registra la relaci\'on \texttt{user\_submolt}, y si es un post nuevo se inserta en \texttt{posts}.
+        \item Por cada post nuevo: GET \texttt{/api/v1/posts/\{id\}} para obtener comentarios y replies recursivas. Se resuelven usuarios y se insertan en \texttt{comments}.
+        \item \textbf{Enrichment incremental:} despu\'es de cada submolt, se toman los autores descubiertos y se enriquecen con \texttt{/api/v1/agents/profile} (karma, descripci\'on, followers, following, x\_handle, created\_at). Se hace flush inmediato para resistir interrupciones.
+    \end{itemize}
+
+    \item \textbf{Fase 3 -- Sweep final de enrichment:} se consultan todos los usuarios en DB, se filtran los que no fueron enriquecidos en esta ejecuci\'on, y se enriquecen hasta \texttt{MAX\_USERS} restantes.
+
+    \item \textbf{Fase 4 -- Reporte final:} se retorna y loguea el resumen de submolts, usuarios, posts y comentarios nuevos junto con los totales en la base de datos.
+\end{enumerate}
+
+\subsubsection{Par\'ametros de Configuraci\'on del ETL}
+
+\begin{table}[H]
+\centering
+\scriptsize
+\begin{tabular}{@{}lcl@{}}
+\toprule
+\textbf{Par\'ametro} & \textbf{Default} & \textbf{Descripci\'on} \\
+\midrule
+MAX\_SUBMOLTS & 50 & M\'aximo de submolts a procesar \\
+MAX\_POSTS & 20 & M\'aximo de posts por submolt \\
+MAX\_COMMENTS & 10 & M\'aximo de comentarios por post \\
+MAX\_USERS & 100 & M\'aximo de usuarios a enriquecer en sweep final \\
+BATCH\_SIZE & 5000 & Tama\~no de chunk para bulk upsert \\
+\bottomrule
+\end{tabular}
+\caption{Par\'ametros de configuraci\'on del ETL en AWS Glue.}
+\end{table}
+
+\subsubsection{Beneficios de AWS Glue Job}
+
+\begin{enumerate}
+    \item \textbf{Optimizaci\'on de costos:} se us\'o un Job de Python Shell con 1 DPU, que es una fracci\'on del costo de un Job de Spark. La facturaci\'on es serverless: solo se pagan los segundos mientras el script realiza las peticiones a la API y los inserts en RDS.
+
+    \item \textbf{Simplicidad de ingenier\'ia:} se us\'o \texttt{requests} para manipular los JSON de las APIs, junto con la librer\'ia personalizada del proyecto importada desde S3.
+
+    \item \textbf{Automatizaci\'on:} se pueden configurar triggers para que el Job se ejecute peri\'odicamente o cuando se suba un archivo de configuraci\'on a S3, manteniendo el ETL actualizado a lo largo del ciclo de vida de moltbook.
+
+    \item \textbf{Escalabilidad controlada:} de 0.0625 a 1 DPU, lo que permite hasta 16 GB de RAM sin cambiar una sola l\'inea de c\'odigo.
+\end{enumerate}
+
+\subsection{Base de Datos -- RDS con PostgreSQL}
+
+Se eligi\'o Amazon RDS con PostgreSQL por los siguientes beneficios:
+
+\begin{itemize}
+    \item \textbf{Cero mantenimiento:} AWS se encarga de mantener PostgreSQL actualizado.
+    \item \textbf{Escalabilidad:} si el ETL empieza a extraer millones de registros, se puede aumentar almacenamiento o c\'omputo con unos clics.
+    \item \textbf{Seguridad integrada:} Security Groups y cifrado en reposo para proteger la informaci\'on.
+    \item \textbf{Backups autom\'aticos:} si algo sale mal en el ETL, se puede restaurar la base de datos a cualquier punto en el tiempo.
+    \item \textbf{Alta disponibilidad:} si la instancia falla, RDS puede cambiar autom\'aticamente a una r\'eplica en otra zona de disponibilidad.
+    \item \textbf{Conectividad flexible:} al ser p\'ublica, se puede acceder desde cualquier lugar (laptop, SageMaker, DBeaver). Idealmente se mover\'ia a un subnet privado con NAT para producci\'on.
+    \item \textbf{Extensiones:} PostGIS, \texttt{pg\_stat\_statements}, etc., disponibles con un comando SQL.
+\end{itemize}
+
+\begin{warningbox}[Nota sobre la configuraci\'on de red]
+Inicialmente se configur\'o el RDS en un subnet privado, pero el Glue Job necesitaba acceso a internet para hacer requests a las APIs de moltbook, y el NAT Gateway no est\'a incluido en el tier gratuito de AWS. Por eso se movi\'o todo al subnet p\'ublico, usando el HOST URL para la conexi\'on en lugar de una conexi\'on privada. En un entorno de producci\'on se agregar\'ia el NAT y se acceder\'ia a la base de datos mediante VPN.
+\end{warningbox}
+
+\subsection{SageMaker con Jupyter}
+
+Se centraliz\'o la fase de experimentaci\'on y modelado en AWS SageMaker por las siguientes razones:
+
+\begin{itemize}
+    \item \textbf{Experimentaci\'on interactiva:} se utilizaron notebooks de Jupyter para limpiar datos con Polars y, si el volumen escala, se tiene la flexibilidad de activar PySpark sin cambiar de entorno.
+
+    \item \textbf{Modularidad profesional:} se importa din\'amicamente el m\'odulo \texttt{.zip} de S3, reutilizando las clases de \texttt{src.database} y los modelos de entrenamiento sin duplicar c\'odigo.
+
+    \item \textbf{Conectividad de baja latencia:} al estar dentro de la red de AWS, la comunicaci\'on con PostgreSQL en RDS es inmediata, sin cuellos de botella externos.
+
+    \item \textbf{Escalabilidad de c\'omputo:} se puede programar en una instancia econ\'omica y, al momento de entrenar modelos pesados, escalar a instancias con m\'as RAM o GPU con un clic.
+
+    \item \textbf{Persistencia y MLOps:} SageMaker mantiene el workspace guardado. Una vez que el modelo sea preciso, se puede desplegarlo como un endpoint de producci\'on para que una aplicaci\'on lo consuma.
+\end{itemize}
+
+Se evalu\'o tambi\'en usar Glue Job para el modelado, pero SageMaker result\'o m\'as econ\'omico y flexible para esta fase de experimentaci\'on.
+
+% ============================================================
+\clearpage
 \section{Conclusiones}
 
 En este proyecto se logr\'o implementar un pipeline de ingenier\'ia de datos completo, desde la recolecci\'on autom\'atica de datos de \texttt{moltbook.com} hasta la predicci\'on del karma de usuarios mediante machine learning.
@@ -1527,6 +1646,8 @@ En este proyecto se logr\'o implementar un pipeline de ingenier\'ia de datos com
     \item Se entren\'o un \textbf{modelo GBM con H2O AutoML} que alcanz\'o R$^2$ = 0.6363 y MAE = 3,234.81, con posterior optimizaci\'on via Grid Search.
 
     \item Se construy\'o una \textbf{CLI profesional con Click} que permite orquestar todas las etapas del pipeline.
+
+    \item Se dise\~n\'o una \textbf{arquitectura en AWS} con S3, Glue Job, RDS y SageMaker que permite llevar el pipeline completo a la nube, migrando la extracci\'on a APIs REST y centralizando el modelado en notebooks con acceso directo a la base de datos.
 \end{enumerate}
 
 \subsection{Decisiones Arquitect\'onicas Clave}
@@ -1545,6 +1666,8 @@ H2O AutoML & scikit-learn manual & Exploraci\'on autom\'atica de algoritmos \\
 Parquet & CSV & Columnar, tipado, compresi\'on \\
 Click & argparse & Subcomandos, decoradores, documentaci\'on \\
 SHA-256 IDs & UUIDs & Determinismo, deduplicaci\'on natural \\
+AWS Glue (Python Shell) & Glue Spark / Lambda & Costo m\'inimo, librer\'ias est\'andar \\
+SageMaker & Glue Job para modelado & Flexibilidad, notebooks interactivos \\
 \bottomrule
 \end{tabular}
 \caption{Decisiones arquitect\'onicas y sus justificaciones.}
@@ -1575,7 +1698,13 @@ SHA-256 IDs & UUIDs & Determinismo, deduplicaci\'on natural \\
 \toprule
 \textbf{T\'ermino} & \textbf{Definici\'on} \\
 \midrule
+AWS Glue & Servicio serverless de AWS para ETL que ejecuta scripts de Python o Spark sin necesidad de aprovisionar servidores. \\
+AWS RDS & Relational Database Service: servicio administrado de bases de datos relacionales en AWS. \\
+AWS S3 & Simple Storage Service: almacenamiento de objetos en la nube de AWS. \\
+AWS SageMaker & Plataforma de AWS para construir, entrenar y desplegar modelos de machine learning con notebooks Jupyter integrados. \\
 AutoML & Automated Machine Learning: proceso automatizado de selecci\'on y optimizaci\'on de modelos de aprendizaje autom\'atico. \\
+CloudWatch & Servicio de monitoreo de AWS para logs, m\'etricas y alarmas de recursos en la nube. \\
+DPU & Data Processing Unit: unidad de c\'omputo de AWS Glue que provee 4 vCPUs y 16 GB de memoria. \\
 GBM & Gradient Boosting Machine: algoritmo de ensemble que construye \'arboles de decisi\'on de forma secuencial, corrigiendo errores previos. \\
 Grid Search & T\'ecnica de optimizaci\'on de hiperpar\'ametros que explora sistem\'aticamente combinaciones de valores predefinidos. \\
 Karma & Puntuaci\'on de reputaci\'on acumulada por los agentes de IA en moltbook.com basada en interacciones. \\

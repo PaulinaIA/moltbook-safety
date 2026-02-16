@@ -1,6 +1,7 @@
 """H2O AutoML trainer for karma prediction."""
 
 import logging
+import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import pickle
@@ -17,8 +18,6 @@ FEATURE_COLUMNS = [
     "followers",
     "following",
     "follower_ratio",
-    "has_description",
-    "has_human_owner",
     "description_length",
     "post_count",
     "total_post_rating",
@@ -27,12 +26,56 @@ FEATURE_COLUMNS = [
     "avg_title_length",
     "avg_post_desc_length",
     "comment_count",
-    "total_comment_rating",
-    "avg_comment_rating",
     "avg_comment_length",
     "total_activity",
     "total_rating",
 ]
+
+
+def clean_training_data(data: pl.DataFrame, target: str = "karma") -> pl.DataFrame:
+    """Clean data before training: remove outliers, apply log transform.
+
+    Args:
+        data: Raw user features DataFrame
+        target: Target column name
+
+    Returns:
+        Cleaned DataFrame with log-transformed target
+    """
+    n_before = len(data)
+
+    # Remove extreme karma outliers (above 99.5th percentile)
+    karma_cap = data[target].quantile(0.995)
+    data = data.filter(pl.col(target) <= karma_cap)
+
+    # Remove users with zero activity (no posts AND no comments) and karma > 0
+    # These are likely bots with inflated karma
+    data = data.filter(
+        ~((pl.col("post_count") == 0)
+          & (pl.col("comment_count") == 0)
+          & (pl.col(target) > 1000))
+    )
+
+    n_after = len(data)
+    logger.info(
+        "Cleaned data: %d -> %d rows (removed %d outliers/bots)",
+        n_before, n_after, n_before - n_after,
+    )
+
+    # Apply log transform to target: log(karma + 1)
+    data = data.with_columns(
+        pl.col(target).log1p().alias("log_karma")
+    )
+
+    logger.info(
+        "Log karma stats: mean=%.2f, median=%.2f, std=%.2f, max=%.2f",
+        data["log_karma"].mean(),
+        data["log_karma"].median(),
+        data["log_karma"].std(),
+        data["log_karma"].max(),
+    )
+
+    return data
 
 
 class H2OTrainer:
@@ -83,6 +126,9 @@ class H2OTrainer:
     ) -> Dict[str, Any]:
         """Train model using H2O AutoML.
 
+        Cleans data (removes outliers/bots) and trains on log(karma+1)
+        for better handling of the skewed distribution.
+
         Args:
             data: Input DataFrame with features and target
             target: Target column name
@@ -94,20 +140,28 @@ class H2OTrainer:
         """
         self._init_h2o()
 
+        # Clean data: remove outliers, add log_karma
+        cleaned = clean_training_data(data, target)
+        self._cleaned_data = cleaned
+
         features = features or FEATURE_COLUMNS
-        available_features = [f for f in features if f in data.columns]
+        available_features = [f for f in features if f in cleaned.columns]
 
         if not available_features:
             raise ValueError("No valid feature columns found in data")
 
+        # Train on log_karma for better distribution
+        train_target = "log_karma"
+
         logger.info(
-            "Training with %d features, %d samples",
+            "Training with %d features, %d samples (target: %s)",
             len(available_features),
-            len(data),
+            len(cleaned),
+            train_target,
         )
 
         # Convert to H2O frame
-        h2o_data = self._h2o.H2OFrame(data.to_pandas())
+        h2o_data = self._h2o.H2OFrame(cleaned.to_pandas())
 
         # Split data
         train, test = h2o_data.split_frame(ratios=[1 - test_size], seed=self.seed)
@@ -127,38 +181,70 @@ class H2OTrainer:
 
         aml.train(
             x=available_features,
-            y=target,
+            y=train_target,
             training_frame=train,
             validation_frame=test,
         )
 
         self._model = aml.leader
+        self._train_target = train_target
         logger.info("Best model: %s", self._model.model_id)
 
-        # Get performance metrics
+        # Get performance on log scale
         perf = self._model.model_performance(test)
+
+        # Also compute metrics in original karma scale
+        test_pred = self._model.predict(test)
+        test_pandas = test.as_data_frame()
+        pred_pandas = test_pred.as_data_frame()
+
+        # Convert log predictions back to original scale: exp(pred) - 1
+        import numpy as np
+        actual_karma = np.expm1(test_pandas[train_target].values)
+        pred_karma = np.expm1(pred_pandas["predict"].values)
+
+        mae_original = float(np.mean(np.abs(actual_karma - pred_karma)))
+        rmse_original = float(np.sqrt(np.mean((actual_karma - pred_karma) ** 2)))
+        ss_res = float(np.sum((actual_karma - pred_karma) ** 2))
+        ss_tot = float(np.sum((actual_karma - np.mean(actual_karma)) ** 2))
+        r2_original = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
 
         results = {
             "model_id": self._model.model_id,
-            "mae": perf.mae(),
-            "rmse": perf.rmse(),
-            "r2": perf.r2(),
+            # Metrics in original karma scale
+            "mae": mae_original,
+            "rmse": rmse_original,
+            "r2": r2_original,
+            # Metrics in log scale (for reference)
+            "log_mae": perf.mae(),
+            "log_rmse": perf.rmse(),
+            "log_r2": perf.r2(),
             "features_used": available_features,
             "train_size": train.nrows,
             "test_size": test.nrows,
+            "samples_after_cleaning": len(cleaned),
         }
 
         logger.info(
-            "Training complete - MAE: %.4f, RMSE: %.4f, R2: %.4f",
+            "Training complete (original scale) - MAE: %.2f, RMSE: %.2f, R2: %.4f",
             results["mae"],
             results["rmse"],
             results["r2"],
+        )
+        logger.info(
+            "Training complete (log scale) - MAE: %.4f, RMSE: %.4f, R2: %.4f",
+            results["log_mae"],
+            results["log_rmse"],
+            results["log_r2"],
         )
 
         return results
 
     def predict(self, data: pl.DataFrame) -> pl.DataFrame:
         """Make predictions on new data.
+
+        Predictions are made in log scale and converted back to original
+        karma scale using exp(pred) - 1.
 
         Args:
             data: Input DataFrame with features
@@ -176,7 +262,13 @@ class H2OTrainer:
 
         # Convert back to Polars
         pred_df = pl.from_pandas(predictions.as_data_frame())
-        pred_df = pred_df.rename({"predict": "karma_predicted"})
+
+        # Convert from log scale back to original karma scale
+        pred_df = pred_df.with_columns(
+            pl.col("predict").map_batches(
+                lambda s: s.to_frame().select(pl.col(s.name).exp() - 1).to_series()
+            ).clip(lower_bound=0).alias("karma_predicted")
+        )
 
         # Join with original data
         result = data.with_columns([
@@ -244,10 +336,6 @@ def train_model(
     # Load data
     data = get_modeling_data(gold_dir)
     logger.info("Loaded %d samples for training", len(data))
-
-    # Filter out users with zero karma (if too many)
-    karma_stats = data["karma"].describe()
-    logger.info("Karma distribution: %s", karma_stats)
 
     # Train model
     trainer = H2OTrainer(
