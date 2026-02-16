@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import time
 from typing import List, Optional, Set
 
@@ -363,11 +364,15 @@ class AsyncMoltbookScraper:
             logger.info("Saved %d posts", len(posts))
 
         # Scrape comments from post pages
+        comment_discovered = set()
         if post_urls_for_comments:
-            await self._scrape_comments_parallel(
+            _, comment_discovered = await self._scrape_comments_parallel(
                 post_urls_for_comments, max_comments_per_post,
                 known_user_names=known_user_names, known_user_ids=known_user_ids,
             )
+
+        # Merge submolt names discovered from posts + from post pages (comments)
+        discovered_submolt_names.update(comment_discovered)
 
         return {
             "submolts": len(submolts),
@@ -434,10 +439,17 @@ class AsyncMoltbookScraper:
 
         all_comments = []
         new_users = []
+        discovered_submolt_names = set()
         for url, html in results:
             if html is None:
                 continue
             try:
+                # Extract submolt references from the full post page HTML
+                submolt_refs = re.findall(r'/m/([A-Za-z0-9_-]+)', html)
+                for ref in submolt_refs:
+                    if len(ref) > 1 and ref not in ('undefined', 'null', 'create'):
+                        discovered_submolt_names.add(ref)
+
                 post_id = url_to_post_id[url]
                 comments_data = parse_comments(html, post_id, max_comments=max_comments)
 
@@ -481,7 +493,10 @@ class AsyncMoltbookScraper:
                 self.db_ops.upsert_many(chunk)
             logger.info("Saved %d comments total", len(all_comments))
 
-        return all_comments
+        if discovered_submolt_names:
+            logger.info("Discovered %d submolt references from post pages", len(discovered_submolt_names))
+
+        return all_comments, discovered_submolt_names
 
     # ─── Main orchestrator ───────────────────────────────────────
 
@@ -530,7 +545,7 @@ class AsyncMoltbookScraper:
         scraped_submolt_names = set()
         round_num = 0
         current_urls = submolt_urls
-        max_rounds = 5  # prevent infinite loops
+        max_rounds = 20  # allow more discovery rounds
 
         while current_urls and round_num < max_rounds:
             round_num += 1
@@ -549,15 +564,15 @@ class AsyncMoltbookScraper:
 
             # Cross-discovery: find new submolts referenced in posts
             discovered = submolt_results.get("discovered_submolt_names", set())
-            known_in_db = set(self.db_ops.get_submolt_names())
-            new_submolt_names = discovered - scraped_submolt_names - known_in_db
+            # Only skip submolts we already scraped THIS run, not old DB ones
+            new_submolt_names = discovered - scraped_submolt_names
 
             if new_submolt_names and len(scraped_submolt_names) < max_submolts:
                 remaining = max_submolts - len(scraped_submolt_names)
                 new_names_list = list(new_submolt_names)[:remaining]
                 current_urls = [f"{self.base_url}/m/{name}" for name in new_names_list]
-                logger.info("Cross-discovery found %d new submolts, scraping %d",
-                            len(new_submolt_names), len(current_urls))
+                logger.info("Cross-discovery found %d new submolts, scraping %d (total scraped: %d)",
+                            len(new_submolt_names), len(current_urls), len(scraped_submolt_names))
             else:
                 current_urls = []
                 logger.info("No new submolts to discover (scraped %d total)", len(scraped_submolt_names))

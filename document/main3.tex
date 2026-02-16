@@ -218,16 +218,16 @@ Desde esa perspectiva creamos Moltbook Karma, un proyecto de ingeniería de dato
 
 \texttt{moltbook.com} es una Single Page Application renderizada con JavaScript, por lo tanto las técnicas convencionales de scraping basadas en \textit{requests} HTTP no son suficientes, por lo tanto se requiere hacer una automatización de navegador con Playwright para renderizar el contenido dinámico antes de poder extraerlo.
 
-El proyecto implementa un pipeline completo de datos que abarca desde la recolección mediante \textit{web scraping}, el almacenamiento en una base de datos relacional SQLite, el procesamiento en capas siguiendo la arquitectura Medallion, hasta el entrenamiento de un modelo de regresión con H2O AutoML para predecir el karma de los usuarios a partir de sus características de actividad e interacción en la plataforma.
+El proyecto implementa un pipeline completo de datos que abarca desde la recolección mediante \textit{web scraping} asíncrono con múltiples workers en paralelo, el almacenamiento en una base de datos relacional PostgreSQL en AWS RDS, el procesamiento en capas siguiendo la arquitectura Medallion, hasta el entrenamiento de un modelo de regresión con H2O AutoML para predecir el karma de los usuarios a partir de sus características de actividad e interacción en la plataforma.
 
 \subsection{Objetivos}
 
 Los objetivos principales de este proyecto son:
 
 \begin{enumerate}
-    \item Dise\~nar un scraper robusto con Playwright para extraer datos de moltbook.com, con rate limiting, reintentos y cach\'e HTML.
-    \item Almacenar los datos crudos en una base de datos SQLite con un esquema relacional normalizado con foreign keys e \'indices.
-    \item Implementar una arquitectura Medallion (Silver/Gold) con Polars utilizando evaluaci\'on lazy para eficiencia en memoria.
+    \item Dise\~nar un scraper robusto y escalable con Playwright, tanto s\'incrono como as\'incrono con m\'ultiples workers en paralelo, para extraer datos de moltbook.com con rate limiting, reintentos y cach\'e HTML.
+    \item Almacenar los datos crudos en una base de datos PostgreSQL en AWS RDS con un esquema relacional normalizado con foreign keys e \'indices.
+    \item Implementar una arquitectura Medallion (Silver/Gold) con Polars utilizando evaluaci\'on lazy para eficiencia en memoria, generando m\'ultiples datasets denormalizados a nivel de usuario, post y comentario.
     \item Realizar an\'alisis exploratorio de datos (EDA) con PySpark para entender la distribuci\'on del karma y las correlaciones.
     \item Entrenar un modelo de regresi\'on con H2O AutoML para predecir el karma de los usuarios y optimizarlo con Grid Search.
     \item Construir una CLI profesional con Click para orquestar todas las etapas del pipeline.
@@ -292,7 +292,7 @@ Los objetivos principales de este proyecto son:
 
 \subsection{Visi\'on General del Pipeline}
 
-Para este proyecto de ingeniería de datos hemos diseñado un pipeline modular que inicia con la extracción de los datos de \texttt{moltbook.com} utilizando técnicas de \textit{web scraping} con Playwright. Estos datos extraídos se almacenan en una base de datos relacional SQLite que luego pasan por el módulo Silver, que se encarga de transformar los datos crudos del esquema relacional en datasets columnares optimizados mediante Polars con evaluación \textit{lazy}. Posteriormente, la capa Gold construye el dataset de modelado mediante agregaciones complejas.
+Para este proyecto de ingeniería de datos hemos diseñado un pipeline modular que inicia con la extracción de los datos de \texttt{moltbook.com} utilizando técnicas de \textit{web scraping} asíncrono con Playwright y múltiples workers en paralelo. Estos datos extraídos se almacenan en una base de datos relacional PostgreSQL en AWS RDS que luego pasan por el módulo Silver, que se encarga de transformar los datos crudos del esquema relacional en datasets columnares optimizados mediante Polars con evaluación \textit{lazy}. Posteriormente, la capa Gold construye múltiples datasets de modelado mediante agregaciones complejas a nivel de usuario, post y comentario.
 
 \begin{figure}[H]
     \centering
@@ -308,7 +308,7 @@ Para este proyecto de ingeniería de datos hemos diseñado un pipeline modular q
         label/.style={font=\tiny, color=codegray, text centered},
     ]
         \node[stage, fill=accentblue] (scraping) {Scraping};
-        \node[stage, fill=accentblue!80, right=of scraping] (sqlite) {SQLite};
+        \node[stage, fill=accentblue!80, right=of scraping] (sqlite) {PostgreSQL};
         \node[stage, fill=accentgreen!90, right=of sqlite] (silver) {Silver};
         \node[stage, fill=accentgreen, right=of silver] (gold) {Gold};
         \node[stage, fill=accentorange!90, right=of gold] (modelo) {Modelo};
@@ -369,8 +369,8 @@ El en el módulo de Modelo como se visualiza en la Figura 1 se utiliza utiliza H
 
 Estructuramos el proyecto en los directorios y archivos que se visualizan en el cuadro 1 para seguir el flujo del pipeline de datos diseñado. Donde en \texttt{config/} se centraliza la configuración del sistema mediante Pydantic, con el cual definimos rutas, parámetros de scraping y ajustes del modelo en un único lugar. 
 
-En \texttt{src/scraper/} implementamos la extracción de datos con Playwright incluyendo la infraestructura de navegador, descubrimiento de URLs, parsers HTML y el orquestador principal. La capa de persistencia en \texttt{src/database/} define los modelos de datos, gestiona conexiones SQLite y proporciona operaciones CRUD genéricas con upsert. 
-El procesamiento de datos en \texttt{src/processing/} aplica la arquitectura Medallion realizando la limpieza de los datos con Polars Lazy en la capa Silver e ingeniería de features en la capa Gold, la cual la complementamos haciendo el análisis exploratorio utilizando PySpark.
+En \texttt{src/scraper/} implementamos la extracción de datos con Playwright incluyendo la infraestructura de navegador tanto síncrona como asíncrona con múltiples workers en paralelo, descubrimiento de URLs, parsers HTML y los orquestadores de scraping. La capa de persistencia en \texttt{src/database/} define los modelos de datos, gestiona conexiones PostgreSQL y proporciona operaciones CRUD genéricas con upsert.
+El procesamiento de datos en \texttt{src/processing/} aplica la arquitectura Medallion realizando la limpieza de los datos con Polars Lazy en la capa Silver e ingeniería de features en la capa Gold generando tres datasets denormalizados, la cual la complementamos haciendo el análisis exploratorio utilizando PySpark.
 
 El módulo \texttt{src/models/} encapsula el entrenamiento con H2O AutoML y la optimización de hiperparámetros. 
 
@@ -391,14 +391,16 @@ Y Finalmente, el directorio \texttt{data/} almacena las salidas del pipeline org
 \hspace{0.3cm}selectors.py & Selectores CSS organizados por entidad \\
 \midrule
 \textbf{src/scraper/} & \textbf{M\'odulo de web scraping} \\
-\hspace{0.3cm}base.py & BaseScraper con Playwright, rate limiter, cache \\
+\hspace{0.3cm}base.py & BaseScraper s\'incrono con Playwright, rate limiter, cache \\
+\hspace{0.3cm}async\_base.py & AsyncBaseScraper con m\'ultiples workers en paralelo \\
 \hspace{0.3cm}discovery.py & Descubrimiento de URLs de usuarios y submolts \\
 \hspace{0.3cm}parsers.py & Funciones de parsing HTML con BeautifulSoup \\
-\hspace{0.3cm}scrapers.py & MoltbookScraper: orquestador principal \\
+\hspace{0.3cm}scrapers.py & MoltbookScraper: orquestador s\'incrono \\
+\hspace{0.3cm}async\_scrapers.py & AsyncMoltbookScraper: orquestador as\'incrono masivo \\
 \midrule
 \textbf{src/database/} & \textbf{Capa de persistencia} \\
 \hspace{0.3cm}models.py & Dataclasses (User, Post, Comment, SubMolt) \\
-\hspace{0.3cm}connection.py & Context manager para conexiones SQLite \\
+\hspace{0.3cm}connection.py & Context manager para conexiones PostgreSQL y SQLite \\
 \hspace{0.3cm}operations.py & Operaciones CRUD con upsert gen\'erico \\
 \midrule
 \textbf{src/processing/} & \textbf{Procesamiento de datos} \\
@@ -411,13 +413,13 @@ Y Finalmente, el directorio \texttt{data/} almacena las salidas del pipeline org
 \hspace{0.3cm}optimizer.py & Grid Search para optimizaci\'on GBM \\
 \midrule
 \textbf{app/} & \textbf{Interfaz CLI} \\
-\hspace{0.3cm}\_\_main\_\_.py & Comandos Click: scrape, build, train, status \\
+\hspace{0.3cm}\_\_main\_\_.py & Comandos Click: scrape, scrape-massive, build, train, status, enrich-users, init-db \\
 \midrule
 \textbf{tests/} & \textbf{Pruebas unitarias} \\
 \hspace{0.3cm}test\_parsers.py, test\_database.py & Tests con pytest y fixtures HTML \\
 \midrule
 \textbf{data/} & \textbf{Salidas del pipeline} \\
-\hspace{0.3cm}moltbook.db & Base de datos SQLite \\
+\hspace{0.3cm}(PostgreSQL en AWS RDS) & Base de datos remota \\
 \hspace{0.3cm}raw/, silver/, gold/, models/ & Capas de datos y artefactos del modelo \\
 \midrule
 \textbf{Archivos ra\'iz} & \\
@@ -696,6 +698,36 @@ class MoltbookScraper:
 
 El flujo interno sigue esta secuencia: (1) descubrir URLs de usuarios y scrapear perfiles, (2) descubrir URLs de submolts y scrapear sus p\'aginas, (3) para cada submolt extraer sus posts, y (4) para cada post navegar a su p\'agina y extraer comentarios. Cada entidad se persiste con upsert inmediato en la base de datos.
 
+\subsection{Scraping As\'incrono Masivo}
+
+Para escalar la recolecci\'on de datos a cientos de miles de registros, implementamos un segundo orquestador \texttt{AsyncMoltbookScraper} basado en la API as\'incrona de Playwright. Este scraper utiliza m\'ultiples p\'aginas de navegador en paralelo controladas por un \texttt{asyncio.Semaphore} para limitar la concurrencia, y un \texttt{asyncio.gather} para ejecutar las solicitudes de forma paralela.
+
+\begin{lstlisting}[language=Python, caption={Scraper as\'incrono con workers paralelos (simplificado)}]
+class AsyncMoltbookScraper:
+    async def scrape_all_massive(self, max_submolts=500, ...):
+        # Phase 1: Discover users + submolts in parallel
+        user_urls, submolt_urls = await asyncio.gather(
+            self.discover_all_users(...),
+            self.discover_all_submolts(...),
+        )
+        # Phase 2: Scrape user profiles
+        users = await self.scrape_users_parallel(user_urls)
+        # Phase 3: Scrape submolts + posts + comments
+        #          with cross-discovery loop (max 5 rounds)
+        while current_urls and round_num < 5:
+            results = await self.scrape_submolts_parallel(...)
+            discovered = results["discovered_submolt_names"]
+            new_names = discovered - scraped_names
+            current_urls = [f"/m/{n}" for n in new_names]
+        # Phase 4: Enrich incomplete user profiles
+        incomplete = self.db_ops.get_incomplete_user_names()
+        await self.scrape_users_parallel(urls, force_refresh=True)
+\end{lstlisting}
+
+El flujo de 4 fases permite maximizar la recolecci\'on de datos. La Fase 1 descubre URLs en paralelo, la Fase 2 scrapea los perfiles de usuario, la Fase 3 implementa un ciclo de \textbf{cross-discovery} donde al scrapear los posts de cada submolt se descubren referencias a otros submolts no conocidos que se agregan a la cola de scraping, y la Fase 4 enriquece los perfiles de usuario que quedaron incompletos (karma = 0 o sin descripci\'on) con un cooldown previo para evitar el rate limiting del servidor.
+
+El bloqueo de recursos innecesarios (im\'agenes, CSS, fuentes) en cada p\'agina del navegador reduce significativamente el consumo de ancho de banda y acelera la carga de las p\'aginas, ya que solo necesitamos el HTML para el parsing.
+
 % \subsection{Scraping \'Etico}
 
 % El scraper implementa pr\'acticas \'eticas de recolecci\'on de datos:
@@ -713,7 +745,7 @@ El flujo interno sigue esta secuencia: (1) descubrir URLs de usuarios y scrapear
 
 \subsection{Dise\~no del Esquema Relacional}
 
-El esquema de la base de datos SQLite consta de 5 tablas con relaciones de foreign key, \'indices de rendimiento, y journal mode WAL para escritura concurrente.
+El esquema de la base de datos PostgreSQL en AWS RDS consta de 5 tablas con relaciones de foreign key e \'indices de rendimiento. Elegimos PostgreSQL por su capacidad de manejar escrituras concurrentes desde m\'ultiples workers del scraper as\'incrono y por su despliegue en la nube con AWS RDS.
 
 \begin{figure}[H]
     \centering
@@ -722,9 +754,7 @@ El esquema de la base de datos SQLite consta de 5 tablas con relaciones de forei
     \label{scrap_arq}
 \end{figure}
 
-\begin{lstlisting}[language=SQL, caption={Esquema DDL de la base de datos}]
-PRAGMA foreign_keys = ON;
-
+\begin{lstlisting}[language=SQL, caption={Esquema DDL de la base de datos PostgreSQL}]
 CREATE TABLE IF NOT EXISTS users (
     id_user TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -746,35 +776,29 @@ CREATE TABLE IF NOT EXISTS sub_molt (
 
 CREATE TABLE IF NOT EXISTS posts (
     id_post TEXT PRIMARY KEY,
-    id_user TEXT NOT NULL,
-    id_submolt TEXT,
+    id_user TEXT NOT NULL REFERENCES users(id_user),
+    id_submolt TEXT REFERENCES sub_molt(id_submolt),
     title TEXT,
     description TEXT,
     rating INTEGER DEFAULT 0,
     date TEXT,
-    scraped_at TEXT NOT NULL,
-    FOREIGN KEY (id_user) REFERENCES users(id_user),
-    FOREIGN KEY (id_submolt) REFERENCES sub_molt(id_submolt)
+    scraped_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS comments (
     id_comment TEXT PRIMARY KEY,
-    id_user TEXT NOT NULL,
-    id_post TEXT NOT NULL,
+    id_user TEXT NOT NULL REFERENCES users(id_user),
+    id_post TEXT NOT NULL REFERENCES posts(id_post),
     description TEXT,
     date TEXT,
     rating INTEGER DEFAULT 0,
-    scraped_at TEXT NOT NULL,
-    FOREIGN KEY (id_user) REFERENCES users(id_user),
-    FOREIGN KEY (id_post) REFERENCES posts(id_post)
+    scraped_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS user_submolt (
-    id_user TEXT NOT NULL,
-    id_submolt TEXT NOT NULL,
-    PRIMARY KEY (id_user, id_submolt),
-    FOREIGN KEY (id_user) REFERENCES users(id_user),
-    FOREIGN KEY (id_submolt) REFERENCES sub_molt(id_submolt)
+    id_user TEXT NOT NULL REFERENCES users(id_user),
+    id_submolt TEXT NOT NULL REFERENCES sub_molt(id_submolt),
+    PRIMARY KEY (id_user, id_submolt)
 );
 
 -- Indices para rendimiento de consultas
@@ -820,7 +844,7 @@ UserSubMolt & user\_submolt & (id\_user, id\_submolt) & Relaci\'on M:N \\
 
 \subsection{Conexi\'on y Gesti\'on de la Base de Datos}
 
-Para la gesti\'on de conexiones implementamos un context manager \texttt{get\_connection} que garantiza commit autom\'atico en caso de \'exito y rollback en caso de error, cerrando siempre la conexi\'on al finalizar. Internamente, la funci\'on \texttt{get\_sqlite\_connection} configura la conexi\'on con dos PRAGMAs importantes: \texttt{foreign\_keys = ON} que habilita la integridad referencial para que SQLite valide las foreign keys definidas en el esquema, y \texttt{journal\_mode = WAL} (Write-Ahead Logging) que mejora el rendimiento de escritura al permitir lecturas concurrentes mientras se escribe, lo cual es \'util durante el scraping donde se realizan muchas operaciones de upsert consecutivas.
+Para la gesti\'on de conexiones implementamos un context manager \texttt{get\_connection} que garantiza commit autom\'atico en caso de \'exito y rollback en caso de error, cerrando siempre la conexi\'on al finalizar. El sistema soporta tanto SQLite (para desarrollo local) como PostgreSQL (para producci\'on). La funci\'on \texttt{get\_postgres\_connection} utiliza \texttt{psycopg2} para conectarse a la instancia de AWS RDS, donde PostgreSQL maneja nativamente la integridad referencial de las foreign keys y la concurrencia de escrituras m\'ultiples desde los workers del scraper as\'incrono, utilizando \texttt{execute\_batch} de \texttt{psycopg2.extras} para operaciones de upsert masivas.
 
 \subsection{Operaciones CRUD con Upsert Gen\'erico}
 
@@ -842,7 +866,7 @@ class DatabaseOperations:
         table = self.TABLE_MAPPING[entity_type]
         data = entity.to_dict()
         columns = list(data.keys())
-        placeholders = ", ".join("?" for _ in columns)
+        placeholders = ", ".join("%s" for _ in columns)
         column_names = ", ".join(columns)
 
         pk = self.PK_MAPPING[entity_type]
@@ -863,7 +887,7 @@ class DatabaseOperations:
 
 Este dise\~no evita duplicados y asegura que los registros siempre contengan la informaci\'on m\'as reciente. El m\'etodo \texttt{upsert\_many} extiende esta funcionalidad para operaciones por lotes, permitiendo insertar m\'ultiples entidades en una sola transacci\'on.
 
-Los datos almacenados en SQLite act\'uan como la capa Bronze de nuestra arquitectura Medallion, conteniendo los datos tal como se obtuvieron del scraping. En la siguiente secci\'on veremos c\'omo estos datos crudos se transforman progresivamente hasta llegar a un dataset listo para el modelado.
+Los datos almacenados en PostgreSQL act\'uan como la capa Bronze de nuestra arquitectura Medallion, conteniendo los datos tal como se obtuvieron del scraping. En la siguiente secci\'on veremos c\'omo estos datos crudos se transforman progresivamente hasta llegar a m\'ultiples datasets listos para el modelado.
 
 % ============================================================
 \section{Procesamiento de Datos -- Arquitectura Medallion}
@@ -885,8 +909,8 @@ El procesamiento de datos sigue la arquitectura Medallion, un patr\'on de dise\~
     ]
         \node[layer, draw=accentblue, fill=accentblue!10] (bronze) {
             \textbf{Bronze}\\[2pt]
-            {\scriptsize SQLite -- Datos crudos}\\
-            {\scriptsize 4 tablas, FK, WAL}
+            {\scriptsize PostgreSQL -- Datos crudos}\\
+            {\scriptsize 5 tablas, FK, AWS RDS}
         };
         \node[layer, draw=accentgreen!80, fill=accentgreen!10, right=1.5cm of bronze] (silver) {
             \textbf{Silver}\\[2pt]
@@ -896,7 +920,7 @@ El procesamiento de datos sigue la arquitectura Medallion, un patr\'on de dise\~
         \node[layer, draw=accentorange, fill=accentorange!10, right=1.5cm of silver] (gold) {
             \textbf{Gold}\\[2pt]
             {\scriptsize Feature Engineering}\\
-            {\scriptsize 18 features + target}
+            {\scriptsize 3 datasets, hasta 27 cols}
         };
 
         \draw[arrow, color=accentblue] (bronze) -- (silver);
@@ -907,7 +931,7 @@ El procesamiento de datos sigue la arquitectura Medallion, un patr\'on de dise\~
 \end{figure}
 
 \begin{itemize}
-    \item \textbf{Bronze (SQLite):} Datos crudos tal como se obtienen del scraping.
+    \item \textbf{Bronze (PostgreSQL):} Datos crudos tal como se obtienen del scraping.
     \item \textbf{Silver (Parquet):} Datos limpios, con tipos correctos, sin duplicados y valores nulos tratados.
     \item \textbf{Gold (Parquet):} Features ingenierizados listos para el modelado.
 \end{itemize}
@@ -916,7 +940,7 @@ Utilizamos \textbf{Polars con evaluaci\'on lazy} en ambas capas, lo que signific
 
 \subsection{Capa Silver -- Limpieza y Validaci\'on}
 
-La capa Silver carga los datos crudos desde SQLite, los limpia y los almacena en formato Parquet columnar. La funci\'on \texttt{load\_table\_to\_lazy} lee cada tabla de SQLite usando \texttt{pl.read\_database\_uri} y la convierte a \texttt{LazyFrame} con el m\'etodo \texttt{.lazy()}, lo que nos permite encadenar todas las operaciones de limpieza sin ejecutarlas hasta el final.
+La capa Silver carga los datos crudos desde PostgreSQL, los limpia y los almacena en formato Parquet columnar. La funci\'on \texttt{load\_table\_to\_lazy} lee cada tabla de PostgreSQL usando \texttt{pl.read\_database\_uri} y la convierte a \texttt{LazyFrame} con el m\'etodo \texttt{.lazy()}, lo que nos permite encadenar todas las operaciones de limpieza sin ejecutarlas hasta el final.
 
 \begin{lstlisting}[language=Python, caption={Limpieza de usuarios con Polars Lazy}]
 def clean_users(lf: pl.LazyFrame) -> pl.LazyFrame:
@@ -996,7 +1020,33 @@ def engineer_user_features(users_lf, posts_lf, comments_lf):
     return features
 \end{lstlisting}
 
-La variable \texttt{comment\_stats} sigue el mismo patr\'on de agregaci\'on que \texttt{post\_stats}, agrupando los comentarios por \texttt{id\_user} para calcular el conteo, rating total, rating promedio y longitud promedio de los comentarios. Despu\'es de unir ambas agregaciones con los datos de usuarios mediante \texttt{left join}, rellenamos los valores nulos con cero (para usuarios sin posts o sin comentarios) y creamos features derivados como el \texttt{follower\_ratio}, la \texttt{total\_activity} y flags binarios. La funci\'on \texttt{build\_gold\_layer} carga los Parquet de la capa Silver y genera el dataset final de features en \texttt{data/gold/}.
+La variable \texttt{comment\_stats} sigue el mismo patr\'on de agregaci\'on que \texttt{post\_stats}, agrupando los comentarios por \texttt{id\_user} para calcular el conteo, rating total, rating promedio y longitud promedio de los comentarios. Despu\'es de unir ambas agregaciones con los datos de usuarios mediante \texttt{left join}, rellenamos los valores nulos con cero (para usuarios sin posts o sin comentarios) y creamos features derivados como el \texttt{follower\_ratio}, la \texttt{total\_activity} y flags binarios.
+
+\subsubsection{Dataset a nivel de Post}
+
+Adem\'as del dataset a nivel de usuario, construimos \texttt{engineer\_post\_features} que genera un dataset denormalizado con 24 columnas por post. Cada fila une el post con las features de su autor (karma, followers, follower ratio, etc.), la comunidad donde fue publicado, y m\'etricas del texto del post (longitud del t\'itulo, longitud de la descripci\'on, conteo de palabras).
+
+\subsubsection{Dataset a nivel de Comentario}
+
+Para maximizar la cantidad de filas y cumplir con el requisito de 200K--500K registros, implementamos \texttt{engineer\_comment\_features} que genera un dataset con \textbf{27 columnas} por comentario. Cada fila denormaliza un comentario con su contexto completo: datos del autor del comentario (karma, followers, following, follower ratio), datos del post donde se hizo el comentario (t\'itulo, rating, n\'umero total de comentarios en ese post), datos del autor del post, y la comunidad. Tambi\'en se generan features ingenierizados del texto del comentario como longitud, conteo de palabras y flag de presencia de texto.
+
+\begin{lstlisting}[language=Python, caption={Features a nivel de comentario (simplificado)}]
+def engineer_comment_features(comments_lf, posts_lf, users_lf, submolts_lf):
+    comment_features = (
+        comments_lf
+        .join(posts_enriched, on="id_post", how="left")
+        .join(comment_author, on="id_user", how="left")
+        .join(post_author, on="post_author_id", how="left")
+        .with_columns([
+            pl.col("description").str.len_chars().alias("comment_length"),
+            pl.col("description").str.split(" ").list.len()
+                .alias("comment_word_count"),
+        ])
+    )
+    return comment_features  # 27 columnas por fila
+\end{lstlisting}
+
+La funci\'on \texttt{build\_gold\_layer} carga los Parquet de la capa Silver y genera los tres datasets en \texttt{data/gold/}: \texttt{user\_features.parquet} (21 cols), \texttt{post\_features.parquet} (24 cols) y \texttt{comment\_features.parquet} (27 cols).
 
 \begin{table}[H]
 \centering
@@ -1004,6 +1054,8 @@ La variable \texttt{comment\_stats} sigue el mismo patr\'on de agregaci\'on que 
 \begin{tabular}{@{}clll@{}}
 \toprule
 \textbf{\#} & \textbf{Feature} & \textbf{Tipo} & \textbf{Descripci\'on} \\
+\midrule
+\multicolumn{4}{l}{\textbf{Dataset user\_features (21 columnas)}} \\
 \midrule
 1 & followers & Int64 & N\'umero de seguidores \\
 2 & following & Int64 & N\'umero de seguidos \\
@@ -1023,9 +1075,21 @@ La variable \texttt{comment\_stats} sigue el mismo patr\'on de agregaci\'on que 
 16 & avg\_comment\_length & Float64 & Longitud promedio de comentarios \\
 17 & total\_activity & UInt32 & post\_count + comment\_count \\
 18 & total\_rating & Int64 & total\_post\_rating + total\_comment\_rating \\
+\midrule
+\multicolumn{4}{l}{\textbf{Dataset comment\_features (27 columnas) -- dataset principal}} \\
+\midrule
+19 & comment\_length & UInt32 & Longitud del texto del comentario \\
+20 & comment\_word\_count & UInt32 & Conteo de palabras del comentario \\
+21 & has\_comment\_text & Int32 & Flag binario de presencia de texto \\
+22 & comment\_author\_karma & Int64 & Karma del autor del comentario \\
+23 & comment\_author\_followers & Int64 & Seguidores del autor del comentario \\
+24 & comment\_author\_follower\_ratio & Float64 & Ratio followers/following del autor \\
+25 & post\_title & Text & T\'itulo del post donde se coment\'o \\
+26 & post\_rating & Int64 & Rating del post \\
+27 & post\_total\_comments & UInt32 & Total de comentarios en ese post \\
 \bottomrule
 \end{tabular}
-\caption{Features ingenierizados para predicci\'on de karma (18 variables).}
+\caption{Features ingenierizados en la capa Gold (selecci\'on de los m\'as relevantes).}
 \label{tab:features}
 \end{table}
 
@@ -1034,7 +1098,7 @@ La variable \texttt{comment\_stats} sigue el mismo patr\'on de agregaci\'on que 
 
 \subsection{Configuraci\'on de SparkSession}
 
-Utilizamos PySpark en modo local para complementar el procesamiento de Polars con capacidades de an\'alisis distribuido y evaluaci\'on de modelos. Configuramos una \texttt{SparkSession} con \texttt{local[*]} que utiliza todos los cores disponibles de la m\'aquina, 2GB de memoria para el driver y 4 shuffle partitions. El modo local es suficiente para nuestro volumen de datos (981 usuarios) y nos permite aprovechar las capacidades de PySpark sin necesidad de un cl\'uster distribuido. Tambi\'en configuramos el log level en ``WARN'' para reducir la verbosidad de la consola durante la ejecuci\'on.
+Utilizamos PySpark en modo local para complementar el procesamiento de Polars con capacidades de an\'alisis distribuido y evaluaci\'on de modelos. Configuramos una \texttt{SparkSession} con \texttt{local[*]} que utiliza todos los cores disponibles de la m\'aquina, 2GB de memoria para el driver y 4 shuffle partitions. El modo local es suficiente para nuestro volumen de datos y nos permite aprovechar las capacidades de PySpark sin necesidad de un cl\'uster distribuido. Tambi\'en configuramos el log level en ``WARN'' para reducir la verbosidad de la consola durante la ejecuci\'on.
 
 \subsection{An\'alisis Exploratorio de Datos}
 
@@ -1059,7 +1123,7 @@ karma_bins = (
 Para entender las relaciones entre variables calculamos las correlaciones de karma contra las dem\'as variables num\'ericas usando \texttt{stat.corr()}, lo que nos permiti\'o identificar que \texttt{karma} vs \texttt{followers} presenta la correlaci\'on m\'as fuerte, sugiriendo que la popularidad medida en seguidores es el mejor predictor del karma acumulado.
 
 \begin{keyinsight}[Hallazgos del EDA]
-El an\'alisis exploratorio revel\'o una distribuci\'on de karma altamente asim\'etrica: la mayor\'ia de usuarios tienen karma = 0 (mediana = 0), mientras que el m\'aximo es 500,002 y la media es 6,553. Solo 41 de 981 usuarios tienen descripci\'on de perfil, y el promedio de seguidores es 0.46.
+El an\'alisis exploratorio revel\'o una distribuci\'on de karma altamente asim\'etrica: la mayor\'ia de usuarios tienen karma = 0 (mediana = 0), mientras que el m\'aximo es 500,002. La mayor\'ia de los agentes son usuarios placeholder creados a partir de autores de posts y comentarios, con perfiles incompletos que se enriquecen progresivamente mediante la Fase 4 del scraper.
 \end{keyinsight}
 
 \subsection{Evaluaci\'on de Predicciones con PySpark}
@@ -1187,12 +1251,15 @@ El proyecto ofrece una CLI construida con Click que permite ejecutar cada etapa 
 
 \begin{table}[H]
 \centering
-\begin{tabular}{@{}llp{6cm}@{}}
+\begin{tabular}{@{}llp{5.5cm}@{}}
 \toprule
 \textbf{Comando} & \textbf{Opciones principales} & \textbf{Descripci\'on} \\
 \midrule
-scrape & --max-users, --max-posts, --force, --headless & Scraping de moltbook.com \\
-build & (sin opciones) & Construcci\'on de capas Silver y Gold \\
+scrape & --max-users, --max-posts, --force & Scraping s\'incrono b\'asico \\
+scrape-massive & --max-submolts, --workers, --rate-limit & Scraping as\'incrono masivo con workers paralelos \\
+enrich-users & --workers, --headless & Enriquecimiento conservador de perfiles incompletos \\
+init-db & --postgres & Inicializaci\'on del esquema de la base de datos \\
+build & (sin opciones) & Construcci\'on de capas Silver y Gold (3 datasets) \\
 train & --max-models, --max-time & Entrenamiento del modelo H2O \\
 status & (sin opciones) & Estado actual del pipeline \\
 \bottomrule
@@ -1209,10 +1276,14 @@ El comando \texttt{build} ejecuta las capas Silver y Gold secuencialmente sin re
 \subsection{Ejemplos de Uso}
 
 \begin{lstlisting}[language=bash, caption={Ejemplos de ejecuci\'on de la CLI}]
-# Scraping completo (100 usuarios, 500 posts)
-python -m app scrape --max-users 100 --max-posts 500
+# Scraping masivo asincrono (3000 submolts, 15 workers)
+python -m app scrape-massive --max-submolts 3000 \
+    --workers 15 --rate-limit 0.05
 
-# Construir capas Silver y Gold
+# Enriquecer perfiles de usuario incompletos
+python -m app enrich-users --workers 3
+
+# Construir capas Silver y Gold (3 datasets)
 python -m app build
 
 # Entrenar modelo con AutoML
@@ -1261,7 +1332,7 @@ Los tests de base de datos utilizan la fixture \texttt{tmp\_path} de pytest para
 
 \subsection{Datos Recopilados}
 
-La ejecuci\'on del pipeline de scraping recopil\'o exitosamente datos de moltbook.com:
+La ejecuci\'on del pipeline de scraping as\'incrono masivo recopil\'o exitosamente datos de moltbook.com utilizando el comando \texttt{scrape-massive} con m\'ultiples workers en paralelo y cross-discovery de submolts:
 
 \begin{table}[H]
 \centering
@@ -1269,13 +1340,14 @@ La ejecuci\'on del pipeline de scraping recopil\'o exitosamente datos de moltboo
 \toprule
 \textbf{Entidad} & \textbf{Cantidad} & \textbf{Fuente} \\
 \midrule
-Usuarios & 981 & Perfiles de moltbook.com/u \\
-Publicaciones & 1,242 & P\'aginas de submolts \\
-Comentarios & 644 & P\'aginas de posts individuales \\
-Comunidades (SubMolts) & 55 & moltbook.com/m \\
+Usuarios & $\sim$10,000+ & Perfiles de moltbook.com/u y autores de posts/comments \\
+Publicaciones & $\sim$16,000+ & P\'aginas de submolts con scroll \\
+Comentarios & $\sim$67,000+ & P\'aginas de posts individuales con scroll \\
+Comunidades (SubMolts) & $\sim$3,000+ & moltbook.com/m + cross-discovery \\
+User--SubMolt & $\sim$41,000+ & Relaciones descubiertas durante scraping \\
 \bottomrule
 \end{tabular}
-\caption{Estad\'isticas del dataset recopilado.}
+\caption{Estad\'isticas del dataset recopilado (en crecimiento continuo).}
 \end{table}
 
 \begin{figure}[H]
@@ -1311,23 +1383,28 @@ Usuarios con human\_owner & Variable \\
 
 \subsection{Resultados del Procesamiento}
 
-La capa Silver limpi\'o y valid\'o los datos crudos, y la capa Gold gener\'o un dataset de features con 21 columnas (18 features + id\_user + name + karma como target).
+La capa Silver limpi\'o y valid\'o los datos crudos, y la capa Gold gener\'o tres datasets de features denormalizados con hasta 27 columnas.
 
 \begin{table}[H]
 \centering
-\begin{tabular}{@{}llr@{}}
+\begin{tabular}{@{}llrl@{}}
 \toprule
-\textbf{Capa} & \textbf{Archivo} & \textbf{Registros} \\
+\textbf{Capa} & \textbf{Archivo} & \textbf{Registros} & \textbf{Columnas} \\
 \midrule
-Silver & users.parquet & 981 \\
-Silver & posts.parquet & 1,242 \\
-Silver & comments.parquet & 644 \\
-Silver & submolts.parquet & 55 \\
-Gold & user\_features.parquet & 981 \\
+Silver & users.parquet & $\sim$10,000+ & 8 \\
+Silver & posts.parquet & $\sim$16,000+ & 8 \\
+Silver & comments.parquet & $\sim$67,000+ & 7 \\
+Silver & submolts.parquet & $\sim$3,000+ & 4 \\
+\midrule
+Gold & user\_features.parquet & $\sim$10,000+ & 21 \\
+Gold & post\_features.parquet & $\sim$16,000+ & 24 \\
+Gold & comment\_features.parquet & $\sim$67,000+ & 27 \\
 \bottomrule
 \end{tabular}
 \caption{Salidas de las capas de procesamiento.}
 \end{table}
+
+El dataset principal para cumplir con el requisito de 200K--500K registros es \texttt{comment\_features.parquet}, que al continuar el scraping overnight con \texttt{scrape-massive --max-submolts 10000} deber\'ia alcanzar las 500K+ filas con 27 columnas cada una.
 
 \subsection{Resultados del Modelo}
 
@@ -1439,11 +1516,11 @@ En este proyecto se logr\'o implementar un pipeline de ingenier\'ia de datos com
 \subsection{Logros Principales}
 
 \begin{enumerate}
-    \item Se dise\~n\'o un \textbf{scraper robusto con Playwright} capaz de extraer datos de una SPA renderizada con JavaScript, con pr\'acticas \'eticas de rate limiting, cach\'e HTML y reintentos con backoff exponencial.
+    \item Se dise\~n\'o un \textbf{scraper robusto y escalable con Playwright} tanto s\'incrono como as\'incrono con m\'ultiples workers en paralelo, capaz de extraer datos de una SPA renderizada con JavaScript, con rate limiting, cach\'e HTML, reintentos con backoff exponencial y cross-discovery de submolts.
 
-    \item Se implement\'o una \textbf{base de datos relacional SQLite} con esquema normalizado de 5 tablas, foreign keys, 6 \'indices de rendimiento, journal mode WAL y operaciones CRUD gen\'ericas con upsert.
+    \item Se implement\'o una \textbf{base de datos relacional PostgreSQL en AWS RDS} con esquema normalizado de 5 tablas, foreign keys, 6 \'indices de rendimiento y operaciones CRUD gen\'ericas con upsert masivo utilizando \texttt{psycopg2}.
 
-    \item Se aplic\'o la \textbf{arquitectura Medallion con Polars Lazy} evaluation, logrando un procesamiento eficiente en memoria con 18 features ingenierizados a partir de datos de 3 entidades.
+    \item Se aplic\'o la \textbf{arquitectura Medallion con Polars Lazy} evaluation, generando tres datasets denormalizados (usuario, post y comentario) con hasta 27 columnas para un total potencial de 500K+ registros.
 
     \item Se realiz\'o un \textbf{EDA completo con PySpark} que revel\'o la distribuci\'on asim\'etrica del karma y las correlaciones clave del dataset.
 
@@ -1462,7 +1539,7 @@ En este proyecto se logr\'o implementar un pipeline de ingenier\'ia de datos com
 \textbf{Decisi\'on} & \textbf{Alternativa descartada} & \textbf{Justificaci\'on} \\
 \midrule
 Playwright & Requests + Selenium & SPA con JavaScript din\'amico \\
-SQLite & PostgreSQL & Proyecto local, sin concurrencia \\
+PostgreSQL (AWS RDS) & SQLite & Concurrencia de workers, escala en la nube \\
 Polars Lazy & Pandas & Eficiencia en memoria, composabilidad \\
 H2O AutoML & scikit-learn manual & Exploraci\'on autom\'atica de algoritmos \\
 Parquet & CSV & Columnar, tipado, compresi\'on \\
@@ -1510,7 +1587,7 @@ RMSE & Root Mean Square Error: ra\'iz cuadrada del promedio de los errores de pr
 SPA & Single Page Application: aplicaci\'on web que carga una sola p\'agina HTML y actualiza din\'amicamente el contenido con JavaScript. \\
 SubMolt & Comunidad tem\'atica dentro de moltbook.com, equivalente a un subreddit. \\
 Upsert & Operaci\'on que inserta un registro si no existe, o lo actualiza si ya existe (INSERT + UPDATE). \\
-WAL & Write-Ahead Logging: modo de journal de SQLite que mejora el rendimiento de escritura concurrente. \\
+WAL & Write-Ahead Logging: modo de journal que mejora el rendimiento de escritura concurrente en bases de datos. \\
 \bottomrule
 \end{tabular}
 \caption{Glosario de t\'erminos t\'ecnicos.}
@@ -1555,20 +1632,26 @@ Ejemplo completo de ejecuci\'on del pipeline desde cero:
 pip install -e ".[dev]"
 playwright install chromium
 
-# 2. Scraping de datos (981 usuarios, 55 submolts)
-python -m app scrape --max-users 1000 --max-posts 2000 \
-    --max-comments 1000 --headless -v
+# 2. Inicializar base de datos PostgreSQL
+python -m app init-db --postgres
 
-# 3. Verificar estado del scraping
+# 3. Scraping masivo asincrono (3000+ submolts)
+python -m app scrape-massive --max-submolts 3000 \
+    --workers 15 --rate-limit 0.05
+
+# 4. (Opcional) Enriquecer perfiles incompletos
+python -m app enrich-users --workers 3
+
+# 5. Verificar estado del scraping
 python -m app status
 
-# 4. Construir capas Silver y Gold
+# 6. Construir capas Silver y Gold (3 datasets)
 python -m app build -v
 
-# 5. Entrenar modelo con H2O AutoML
+# 7. Entrenar modelo con H2O AutoML
 python -m app train --max-models 10 --max-time 300 -v
 
-# 6. Verificar resultados
+# 8. Verificar resultados
 python -m app status
 \end{lstlisting}
 
