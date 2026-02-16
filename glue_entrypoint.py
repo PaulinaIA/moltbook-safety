@@ -83,8 +83,8 @@ def main() -> None:
         db_ops.ensure_tables()
         logger.info("Tablas verificadas/creadas.")
 
-        # 2. Lanzar Scraper de medio millón de datos
-        with MoltbookScraper(db_ops=db_ops, headless=True) as scraper:
+        # 2. Scraper sin Playwright (requests + BeautifulSoup) para evitar pip/cache en Glue
+        with MoltbookScraper(db_ops=db_ops, headless=True, use_playwright=False) as scraper:
             result = scraper.scrape_all(
                 max_users=int(args.get("MAX_USERS", 100)),
                 max_submolts=50,

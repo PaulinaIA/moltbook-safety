@@ -37,15 +37,13 @@ class URLDiscovery:
 
         logger.info("Discovering users from %s", users_url)
 
-        # Fetch and scroll to load more users
         html = self.scraper.fetch_page(users_url, wait_selector="a[href^='/u/']")
-        # Switch to Karma view to get more users
-        logger.info("Switching to Karma view to fetch the most karma users...")
-        self.scraper.page.click("button:has-text('Karma')")
-        time.sleep(2)
-
-        self.scraper.scroll_to_load_all(max_scrolls=5)
-        html = self.scraper.page.content()
+        if getattr(self.scraper, "use_browser", False):
+            logger.info("Switching to Karma view to fetch the most karma users...")
+            self.scraper.page.click("button:has-text('Karma')")
+            time.sleep(2)
+            self.scraper.scroll_to_load_all(max_scrolls=5)
+            html = self.scraper.page.content()
 
         users = parse_users_list(html)
         urls: List[str] = []
@@ -76,8 +74,9 @@ class URLDiscovery:
         logger.info("Discovering submolts from %s", submolts_url)
 
         html = self.scraper.fetch_page(submolts_url, wait_selector="a[href^='/m/']")
-        self.scraper.scroll_to_load_all(max_scrolls=3)
-        html = self.scraper.page.content()
+        if getattr(self.scraper, "use_browser", False):
+            self.scraper.scroll_to_load_all(max_scrolls=3)
+            html = self.scraper.page.content()
 
         submolts = parse_submolt_list(html)
         urls: List[str] = []

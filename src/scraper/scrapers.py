@@ -12,7 +12,6 @@ from typing import List, Optional, Set, Type, TypeVar
 
 from src.database.models import Comment, Post, SubMolt, User, UserSubMolt
 from src.database.operations import DatabaseOperations
-from src.scraper.base import BaseScraper
 from src.scraper.discovery import URLDiscovery
 from src.scraper.parsers import (
     parse_user_profile,
@@ -93,28 +92,36 @@ class MoltbookScraper:
         db_ops: Optional[DatabaseOperations] = None,
         headless: bool = True,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        use_playwright: bool = True,
     ):
         """Initialize moltbook scraper.
 
         Args:
             db_ops: Database operations instance (uses bulk upsert in chunks)
-            headless: Run browser in headless mode
+            headless: Run browser in headless mode (solo con use_playwright=True)
             batch_size: Flush buffer every N records (default 1000)
+            use_playwright: Si False, usa requests + BeautifulSoup (sin navegador). Para Glue.
         """
         self.db_ops = db_ops or DatabaseOperations()
         self.headless = headless
+        self.use_playwright = use_playwright
         self._batch = BatchWriter(
             self.db_ops,
             batch_size=getattr(self.db_ops, "chunk_size", None) or batch_size,
         )
-        self._scraper: Optional[BaseScraper] = None
+        self._scraper = None
         self._discovery: Optional[URLDiscovery] = None
 
     def __enter__(self) -> "MoltbookScraper":
         """Enter context manager."""
         self.db_ops.ensure_tables()
-        self._scraper = BaseScraper(headless=self.headless)
-        self._scraper.start()
+        if self.use_playwright:
+            from src.scraper.base import BaseScraper
+            self._scraper = BaseScraper(headless=self.headless)
+            self._scraper.start()
+        else:
+            from src.scraper.fetcher_requests import RequestsFetcher
+            self._scraper = RequestsFetcher(rate_limit=1.0, request_timeout=30)
         self._discovery = URLDiscovery(self._scraper)
         return self
 
@@ -123,11 +130,11 @@ class MoltbookScraper:
         try:
             self._batch.flush_all()
         finally:
-            if self._scraper:
+            if self._scraper is not None and hasattr(self._scraper, "close"):
                 self._scraper.close()
 
     @property
-    def scraper(self) -> BaseScraper:
+    def scraper(self):
         """Get scraper instance."""
         if self._scraper is None:
             raise RuntimeError("Scraper not initialized. Use context manager.")
@@ -295,7 +302,9 @@ class MoltbookScraper:
                     force_refresh=True,
                     wait_selector="div.mt-6",
                 )
-                self.scraper.scroll_to_load_all(max_scrolls=5)
+                if getattr(self.scraper, "use_browser", False):
+                    self.scraper.scroll_to_load_all(max_scrolls=5)
+                    html = self.scraper.page.content()
                 self._scrape_comments_from_html(html=html, post_id=post.id_post, max_comments=max_comments)
 
             except Exception as e:

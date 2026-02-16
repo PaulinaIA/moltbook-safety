@@ -50,6 +50,8 @@ class BaseScraper:
         - HTML caching for incremental scraping
     """
 
+    use_browser = True  # URLDiscovery usa click/scroll solo si use_browser es True
+
     def __init__(
         self,
         headless: bool = True,
