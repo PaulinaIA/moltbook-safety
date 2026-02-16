@@ -21,6 +21,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Type, TypeVar, Union
 
+from glue_job_script import _pg_connection
+
 # ---------------------------------------------------------------------------
 # Logging -- lo mando a stdout para que CloudWatch lo capture
 # ---------------------------------------------------------------------------
@@ -525,6 +527,14 @@ class Database:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT COUNT(*) FROM {table}")
                 return cur.fetchone()[0]
+    
+    def get_submolt_id_by_name(self, name: str) -> Optional[str]:
+        """devuelvo el id del submolt si ya existe en la db."""
+        with _pg_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT id_submolt FROM sub_molt WHERE name = %s LIMIT 1", (name,))
+            row = cur.fetchone()
+            return row[0] if row else None
 
 
 # ===========================================================================
@@ -1217,13 +1227,13 @@ class MoltbookScraper:
         return all_names[:max_submolts]
 
     # -- pipeline principal -------------------------------------------------
-
+    
     def scrape_all(
         self,
-        max_users: int = 100,
-        max_submolts: int = 50,
+        max_users: int = 10000,
+        max_submolts: int = 100,
         max_posts: int = 10,
-        max_comments: int = 100,
+        max_comments: int = 2,
     ) -> Dict[str, int]:
         """Pipeline completo. Enriquezco usuarios de forma incremental
         despues de cada submolt para que si interrumpen el ETL,
@@ -1236,6 +1246,14 @@ class MoltbookScraper:
         submolts_ok = 0
         for name in submolt_names:
             try:
+                existing_sm_id = self.db.get_submolt_id_by_name(name)
+                if existing_sm_id:
+                    logger.info("Submolt %s ya existe en DB con id %s", name, existing_sm_id)
+                    continue
+                else:
+                    logger.info("Submolt %s es nueva, la voy a procesar", name)
+                    # self._register_user_submolt(user_id="system", submolt_id=existing_sm_id)
+
                 url = f"{BASE_URL}/m/{name}"
                 html = self._fetcher.fetch(
                     url,
@@ -1450,7 +1468,7 @@ def main() -> None:
     db_user = params.get("DB_USER", "postgres")
     db_password = params.get("DB_PASSWORD", "Cl6rS2FxuKTkp2lQ")
     batch_size = int(params.get("BATCH_SIZE", "50"))
-    max_users = int(params.get("MAX_USERS", "30"))
+    max_users = int(params.get("MAX_USERS", "10000"))
     s3_bucket = params.get("S3_HTML_BUCKET", "")
 
     if not db_host or not db_name:

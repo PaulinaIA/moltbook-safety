@@ -1,0 +1,74 @@
+┌─────────────────────────────────────────────────────────────┐
+│                     PARÁMETROS DE ENTRADA                   │
+│  DB_HOST, DB_NAME, DB_USER, DB_PASSWORD                     │
+│  MAX_USERS, MAX_SUBMOLTS, MAX_POSTS, MAX_COMMENTS           │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│              FASE 0 — INICIALIZACIÓN                        │
+│  • Conexión a PostgreSQL (RDS)                              │
+│  • Creación de tablas si no existen (idempotente)           │
+│  • Inicialización del fetcher HTTP con rate limiter (1 req/s)│
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│              FASE 1 — DESCUBRIMIENTO DE SUBMOLTS            │
+│  • Fetch HTML de /m para descubrir submolts dinámicamente   │
+│  • Complementa con lista semilla de 65 submolts conocidos   │
+│  • Prioriza submolts nuevos (no existentes en DB) primero   │
+│  • Limita a MAX_SUBMOLTS                                    │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│         FASE 2 — LOOP POR CADA SUBMOLT                      │
+│                                                             │
+│  Para cada submolt:                                         │
+│                                                             │
+│  2a. GET /api/v1/submolts/{name}                            │
+│      → Obtiene info del submolt + lista de posts (JSON)     │
+│      → Si es nuevo: INSERT en sub_molt                      │
+│      → Si ya existe: continúa (busca posts nuevos)          │
+│                                                             │
+│  2b. Por cada post del API (hasta MAX_POSTS):               │
+│      → Extrae author.name → _resolve_user_id()             │
+│        • Si el usuario no existe en DB: INSERT (karma=0)    │
+│        • Si ya existe: reutiliza su id                      │
+│      → Registra relación user_submolt                       │
+│      → Si el post ya existe en DB (post_exists): SKIP       │
+│      → Si es nuevo: INSERT en posts                         │
+│                                                             │
+│  2c. Por cada post nuevo con ID:                            │
+│      GET /api/v1/posts/{id}                                 │
+│      → Aplana comentarios + replies recursivas              │
+│      → Por cada comentario (hasta MAX_COMMENTS):            │
+│        • Resuelve/crea usuario del comentarista             │
+│        • INSERT en comments                                 │
+│        • Registra user_submolt                              │
+│                                                             │
+│  2d. ENRICHMENT INCREMENTAL (después de cada submolt):      │
+│      → Toma autores descubiertos en este submolt            │
+│      → Filtra los que ya fueron enriquecidos                │
+│      → Para cada pendiente:                                 │
+│        GET /api/v1/agents/profile?name={name}               │
+│        → Extrae: karma, description, followers, following,  │
+│          human_owner (x_handle), joined (created_at)        │
+│        → UPDATE del usuario en DB (upsert)                  │
+│        → Flush inmediato (resistente a interrupciones)      │
+│                                                             │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│         FASE 3 — SWEEP FINAL DE ENRICHMENT                  │
+│  • Consulta TODOS los usuarios en DB                        │
+│  • Filtra los que no fueron enriquecidos en esta ejecución  │
+│  • Enriquece hasta MAX_USERS restantes                      │
+│  • Mismo proceso: API profile → upsert → flush             │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│              FASE 4 — REPORTE FINAL                         │
+│  Retorna y loguea:                                          │
+│  • new_submolts, new_users, new_posts, new_comments         │
+│  • new_enriched                                             │
+│  • total_users, total_submolts, total_posts, total_comments │
+└─────────────────────────────────────────────────────────────┘

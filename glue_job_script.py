@@ -971,22 +971,61 @@ class MoltbookScraper:
     # -- discovery ----------------------------------------------------------
 
     def _discover_submolts(self, max_submolts: int) -> List[str]:
-        """descubro submolts navegando /m y complemento con la lista semilla."""
-        discovered: Set[str] = set()
-        try:
-            html = self._fetcher.fetch_page(f"{BASE_URL}/m")
-            for item in parse_submolt_list(html):
-                name = item.get("name", "")
-                if name:
-                    discovered.add(name)
-            logger.info("descubri %d submolts desde /m", len(discovered))
-        except Exception as exc:
-            logger.warning("no pude navegar /m: %s -- uso solo semilla", exc)
+        """descubro submolts usando el api paginado /api/v1/submolts.
+        la pagina /m solo muestra ~6 submolts y necesita click en
+        'Load More Communities' para cargar mas (requests no puede).
+        el api devuelve hasta 100 por pagina con offset/limit."""
+        discovered: List[Dict[str, Any]] = []
+        offset = 0
+        page_size = 100  # maximo que acepta el api
 
-        # complemento con la semilla
+        while offset < max_submolts:
+            try:
+                api_url = f"{BASE_URL}/api/v1/submolts?offset={offset}&limit={page_size}"
+                logger.info("consultando api submolts: offset=%d", offset)
+                self._fetcher._limiter.wait()
+                resp = self._fetcher.session.get(api_url, timeout=30)
+                if resp.status_code != 200:
+                    logger.warning("api submolts respondio %d en offset=%d", resp.status_code, offset)
+                    break
+
+                payload = resp.json()
+                batch = payload.get("submolts") or []
+                if not batch:
+                    logger.info("no hay mas submolts en offset=%d", offset)
+                    break
+
+                for sm in batch:
+                    name = sm.get("name")
+                    if name:
+                        discovered.append(name)
+
+                total_available = payload.get("count") or 0
+                logger.info(
+                    "api submolts: recibi %d (offset=%d, total=%d)",
+                    len(batch), offset, total_available,
+                )
+
+                offset += len(batch)
+
+                # si recibi menos de page_size, ya no hay mas
+                if len(batch) < page_size:
+                    break
+
+            except Exception as exc:
+                logger.warning("error en api submolts offset=%d: %s", offset, exc)
+                break
+
+        # complemento con la semilla por si el api falla o no devuelve algunos
+        seen = set(discovered)
         for name in SEED_SUBMOLTS:
-            discovered.add(name)
+            if name not in seen:
+                discovered.append(name)
+                seen.add(name)
 
+        logger.info("descubri %d submolts totales (api + semilla)", len(discovered))
+
+        # priorizo submolts nuevos (no existentes en db)
         known = set(self.db.get_submolt_names())
         new_names = [n for n in discovered if n not in known]
         old_names = [n for n in discovered if n in known]
@@ -1317,7 +1356,7 @@ def main() -> None:
     max_submolts = int(args.get("MAX_SUBMOLTS") or os.environ.get("MAX_SUBMOLTS", "50"))
     max_posts = int(args.get("MAX_POSTS") or os.environ.get("MAX_POSTS", "20"))
     max_comments = int(args.get("MAX_COMMENTS") or os.environ.get("MAX_COMMENTS", "10"))
-    batch_size = int(args.get("BATCH_SIZE") or os.environ.get("BATCH_SIZE", "5000"))
+    batch_size = int(args.get("BATCH_SIZE") or os.environ.get("BATCH_SIZE", "5"))
 
     logger.info(
         "inicio etl: host=%s db=%s max_users=%s max_submolts=%s",
