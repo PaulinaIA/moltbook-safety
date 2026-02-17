@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def create_spark_session(app_name: str = "MoltbookKarma"):
-    """Create a local SparkSession.
+    """Create or reuse a local SparkSession.
 
     Args:
         app_name: Name for the Spark application
@@ -35,12 +35,12 @@ def create_spark_session(app_name: str = "MoltbookKarma"):
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
-    logger.info("SparkSession created: %s", app_name)
     return spark
 
 
 def spark_eda(
     silver_dir: Optional[Path] = None,
+    spark=None,
 ) -> Dict[str, Any]:
     """Run exploratory data analysis using PySpark.
 
@@ -50,26 +50,23 @@ def spark_eda(
 
     Args:
         silver_dir: Path to silver layer directory
+        spark: Optional existing SparkSession (creates one if None)
 
     Returns:
         Dictionary with EDA results
     """
     from pyspark.sql import functions as F
-    from pyspark.sql.types import DoubleType
 
     silver_dir = silver_dir or settings.silver_dir
-    spark = create_spark_session("MoltbookEDA")
+    owns_spark = spark is None
+    spark = spark or create_spark_session("MoltbookEDA")
 
     results = {}
 
     # --- Load data ---
-    users_path = str(silver_dir / "users.parquet")
-    posts_path = str(silver_dir / "posts.parquet")
-    comments_path = str(silver_dir / "comments.parquet")
-
-    users_df = spark.read.parquet(users_path)
-    posts_df = spark.read.parquet(posts_path)
-    comments_df = spark.read.parquet(comments_path)
+    users_df = spark.read.parquet(str(silver_dir / "users.parquet")).cache()
+    posts_df = spark.read.parquet(str(silver_dir / "posts.parquet"))
+    comments_df = spark.read.parquet(str(silver_dir / "comments.parquet"))
 
     results["record_counts"] = {
         "users": users_df.count(),
@@ -85,12 +82,10 @@ def spark_eda(
     results["users_describe"] = users_df.describe().toPandas()
     results["posts_describe"] = posts_df.describe().toPandas()
 
-    # --- Null counts per column ---
-    user_nulls = {}
-    for col_name in users_df.columns:
-        null_count = users_df.filter(F.col(col_name).isNull()).count()
-        user_nulls[col_name] = null_count
-    results["user_null_counts"] = user_nulls
+    # --- Null counts per column (single pass) ---
+    null_exprs = [F.sum(F.col(c).isNull().cast("int")).alias(c) for c in users_df.columns]
+    null_row = users_df.select(null_exprs).toPandas().iloc[0].to_dict()
+    results["user_null_counts"] = {k: int(v) for k, v in null_row.items()}
 
     # --- Karma distribution by bins ---
     karma_bins = (
@@ -119,15 +114,10 @@ def spark_eda(
     results["top_users"] = top_users
 
     # --- Correlation: karma vs numeric columns ---
-    numeric_cols = ["karma", "followers", "following"]
     correlations = {}
-    for col_name in numeric_cols:
-        if col_name != "karma":
-            corr_val = users_df.stat.corr(
-                "karma",
-                col_name,
-            )
-            correlations[f"karma_vs_{col_name}"] = round(corr_val, 4)
+    for col_name in ["followers", "following"]:
+        corr_val = users_df.stat.corr("karma", col_name)
+        correlations[f"karma_vs_{col_name}"] = round(corr_val, 4)
     results["correlations"] = correlations
 
     # --- Posts per user stats ---
@@ -142,20 +132,24 @@ def spark_eda(
     )
     results["posts_per_user_describe"] = posts_per_user.describe().toPandas()
 
+    users_df.unpersist()
     logger.info("PySpark EDA complete")
-    spark.stop()
+    if owns_spark:
+        spark.stop()
     return results
 
 
 def spark_evaluate_predictions(
     predictions_path: Optional[Path] = None,
     gold_dir: Optional[Path] = None,
+    spark=None,
 ) -> Dict[str, Any]:
     """Evaluate model predictions using PySpark ML evaluation.
 
     Args:
         predictions_path: Path to predictions Parquet file
         gold_dir: Gold layer directory (used to find predictions)
+        spark: Optional existing SparkSession (creates one if None)
 
     Returns:
         Dictionary with evaluation metrics
@@ -165,12 +159,13 @@ def spark_evaluate_predictions(
 
     gold_dir = gold_dir or settings.gold_dir
     predictions_path = predictions_path or (settings.models_dir / "predictions.parquet")
-    spark = create_spark_session("MoltbookEvaluation")
+    owns_spark = spark is None
+    spark = spark or create_spark_session("MoltbookEvaluation")
 
     results = {}
 
-    # Load predictions
-    pred_df = spark.read.parquet(str(predictions_path))
+    # Load and cache predictions (small dataset, reused multiple times)
+    pred_df = spark.read.parquet(str(predictions_path)).cache()
     total = pred_df.count()
     results["total_predictions"] = total
 
@@ -179,7 +174,7 @@ def spark_evaluate_predictions(
         pred_df
         .withColumn("label", F.log1p(F.col("karma").cast("double")))
         .withColumn("prediction", F.log1p(F.col("karma_predicted")))
-    )
+    ).cache()
 
     evaluators = {
         "mae": RegressionEvaluator(metricName="mae"),
@@ -205,31 +200,32 @@ def spark_evaluate_predictions(
         logger.info("PySpark (karma scale) %s: %.4f", metric_name, value)
 
     # --- Residual analysis (log scale) ---
-    residuals_df = (
-        log_eval_df
-        .withColumn("residual", F.col("label") - F.col("prediction"))
-        .withColumn("abs_residual", F.abs(F.col("residual")))
-    )
-
-    residual_stats = residuals_df.select(
-        F.mean("residual").alias("mean_residual"),
-        F.stddev("residual").alias("std_residual"),
-        F.min("residual").alias("min_residual"),
-        F.max("residual").alias("max_residual"),
-        F.mean("abs_residual").alias("mean_abs_residual"),
+    residual_stats = log_eval_df.select(
+        F.mean(F.col("label") - F.col("prediction")).alias("mean_residual"),
+        F.stddev(F.col("label") - F.col("prediction")).alias("std_residual"),
+        F.min(F.col("label") - F.col("prediction")).alias("min_residual"),
+        F.max(F.col("label") - F.col("prediction")).alias("max_residual"),
+        F.mean(F.abs(F.col("label") - F.col("prediction"))).alias("mean_abs_residual"),
     ).toPandas()
 
     results["residual_stats"] = residual_stats.to_dict(orient="records")[0]
 
     # --- Prediction vs actual by quartiles (original karma scale) ---
+    pcts = karma_eval_df.select(
+        F.percentile_approx("label", 0.25).alias("q25"),
+        F.percentile_approx("label", 0.50).alias("q50"),
+        F.percentile_approx("label", 0.75).alias("q75"),
+    ).first()
+    q25, q50, q75 = pcts["q25"], pcts["q50"], pcts["q75"]
+
     quartile_analysis = (
         karma_eval_df
         .withColumn(
             "karma_quartile",
             F.when(F.col("label") == 0, "Q0 (zero)")
-            .when(F.col("label") <= F.percentile_approx("label", 0.25), "Q1")
-            .when(F.col("label") <= F.percentile_approx("label", 0.5), "Q2")
-            .when(F.col("label") <= F.percentile_approx("label", 0.75), "Q3")
+            .when(F.col("label") <= q25, "Q1")
+            .when(F.col("label") <= q50, "Q2")
+            .when(F.col("label") <= q75, "Q3")
             .otherwise("Q4 (top)")
         )
         .groupBy("karma_quartile")
@@ -244,6 +240,9 @@ def spark_evaluate_predictions(
     )
     results["quartile_analysis"] = quartile_analysis
 
+    log_eval_df.unpersist()
+    pred_df.unpersist()
     logger.info("PySpark evaluation complete")
-    spark.stop()
+    if owns_spark:
+        spark.stop()
     return results

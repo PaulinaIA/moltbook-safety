@@ -10,7 +10,8 @@
       "Bash(conda info:*)",
       "Bash(where:*)",
       "Bash(ls:*)",
-      "Bash(cmd.exe /c \"where python\")"
+      "Bash(cmd.exe /c \"where python\")",
+      "Bash(/c/Users/\"Paulina Peralta\"/anaconda3/python.exe:*)"
     ]
   }
 }
